@@ -33,7 +33,7 @@
   network: { list: 'network:list' },
   tabs: { list: 'tabs:list', save: 'tabs:save', reorder: 'tabs:reorder', delete: 'tabs:delete' },
   entries: {
-    list: 'entries:list', search: 'entries:search', get: 'entries:get', save: 'entries:save', move: 'entries:move', reveal: 'entries:reveal', totp: 'entries:totp',
+    list: 'entries:list', print: 'entries:print', search: 'entries:search', get: 'entries:get', save: 'entries:save', move: 'entries:move', reveal: 'entries:reveal', totp: 'entries:totp',
     delete: 'entries:delete', trash: 'entries:trash', restore: 'entries:restore', purge: 'entries:purge', importCsv: 'entries:importCsv',
   },
 });

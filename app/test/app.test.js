@@ -189,6 +189,16 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   for (const bad of ['0', '70000', 'abc', '80.5']) await fails(Promise.resolve().then(() => H('entries:save', { id: px.id, tabId: st2.id, title: 'x', fields: { port: bad } })), /valid port/);
   assert.strictEqual(H('entries:save', { id: px.id, tabId: st2.id, title: 'Behind proxy', fields: { port: '' } }).fields.port, undefined, 'an empty port is simply not shown');
 
+  // printing: structure always, secrets only when asked, nested entries on request, audited as one event
+  const pr = H('entries:print', [server.id], { children: true });
+  assert.ok(pr.docs.length >= 2 && pr.docs[0].depth === 0 && pr.docs.some(d => d.depth === 1));
+  assert.ok(!JSON.stringify(pr).includes('a-new-password-99') && !JSON.stringify(pr).includes('ipmi-secret-1'), 'no secrets unless asked');
+  const pm = H('entries:print', [multi.id], {}); assert.ok(pm.docs[0].accounts.length === 1 && pm.docs[0].accounts[0].password === '••••••••' && !JSON.stringify(pm).includes('ro-pass-22222'));
+  const prs = H('entries:print', [server.id], { secrets: true });
+  assert.ok(JSON.stringify(prs).includes('a-new-password-99') && prs.docs.length === 1 && prs.secrets);
+  assert.strictEqual(H('entries:print', [server.id], { notes: false }).docs[0].notes, '');
+  assert.ok(H('vault:audit', 20).some(r => r.action === 'print' && /with secrets/.test(r.detail || '')));
+
   // ---- lock, wrong factors, throttle, unlock, recovery ----------------------------------------
   H('vault:lock');
   assert.strictEqual(H('vault:status').state, 'locked');

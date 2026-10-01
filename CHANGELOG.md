@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-01
+
+### Added
+
+- **Print** an entry (button on the entry page; optionally with everything nested under it) or the entries currently listed (button in the vault list). It prints a clean page through a hidden frame, so no pop-up is needed. Passwords, PINs, keys and 2FA seeds print as dots unless you tick "include passwords…", which warns on the page and is logged in Activity as "Printed".
+
+### Fixed
+
+- **Show** and **Generate** next to a password in the entry editor did nothing (they could not find their input). Both work again.
+
 ## [0.5.1] - 2026-10-01
 
 ### Fixed

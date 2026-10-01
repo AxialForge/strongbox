@@ -108,6 +108,9 @@ remembers which defaults were already offered, so a type the user deleted never 
 
 - **The entry editor redraws the whole form** (adding a row, changing the type) from a `draft` object. Symptom: the page jumped to the top on every "Add login". Cause: the redraw replaced the content and `render()` focused the title field each time. It now keeps `scrollTop`, focuses the title only on the first draw, and focuses the new row. Any new redraw path must go through `render()`.
 
+- **Editor buttons find their input through `boxOf(b)`** (`.secretin`, else `.inline`). Symptom: Show and Generate did nothing on the main password fields. Cause: `closest('.secretin, .inline')` returns the nearest of the two, and in a main field the button's own `.inline` row holds no input. Never use a combined selector for this.
+- **Printing goes through `entries:print`, never through the page.** The server decides what is in the document (secrets masked unless `secrets: true`, the whole print audited once); the browser only formats it (`SB.printHtml`) and prints it in a hidden iframe.
+
 ## Roadmap (unbuilt)
 
 - Rotate the data key (re-encrypt every record) from Settings.

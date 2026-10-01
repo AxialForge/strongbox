@@ -89,7 +89,7 @@ views.vault = guard(async (arg) => {
   const newTab = tabId === 'all' ? (tabs[0] && tabs[0].id) : tabId;
   v.innerHTML = `<h1>Vault</h1>
     <div class="tabbar"><a class="tabbtn ${tabId === 'all' ? 'on' : ''}" href="#vault/all">All <span class="count">${list.length}</span></a>${tabs.map(t => `<a class="tabbtn ${t.id === tabId ? 'on' : ''}" href="#vault/${t.id}"><i class="tdot tc-${esc(t.color || 'blue')}"></i>${esc(t.icon)} ${esc(t.name)} <span class="count">${t.count}</span></a>`).join('')}${isAdmin() ? '<a class="tabbtn plus" href="#tabs" title="Manage types">⚙</a>' : ''}</div>
-    <div class="toolbar"><input type="search" id="q" placeholder="Search titles, fields, notes, tags (never secrets)" autocomplete="off"><span class="muted small" id="qcount"></span><span class="grow"></span>${isAdmin() ? `<button class="small" id="expand">Expand all</button><button class="small" id="collapse">Collapse</button><select id="newFrom" class="small" title="Start from a template"><option value="">＋ From template…</option>${templates.map(t => `<option value="${esc(t.id)}">${esc(t.name)}${t.builtin ? '' : ' (yours)'}</option>`).join('')}</select><a href="#new/${newTab}"><button class="primary">New entry</button></a>` : ''}</div>
+    <div class="toolbar"><input type="search" id="q" placeholder="Search titles, fields, notes, tags (never secrets)" autocomplete="off"><span class="muted small" id="qcount"></span><span class="grow"></span><button class="small" id="printList" title="Print what is listed">Print…</button>${isAdmin() ? `<button class="small" id="expand">Expand all</button><button class="small" id="collapse">Collapse</button><select id="newFrom" class="small" title="Start from a template"><option value="">＋ From template…</option>${templates.map(t => `<option value="${esc(t.id)}">${esc(t.name)}${t.builtin ? '' : ' (yours)'}</option>`).join('')}</select><a href="#new/${newTab}"><button class="primary">New entry</button></a>` : ''}</div>
     <div class="tagrow" id="tagrow"></div>
     <div class="card elist" id="elist"></div>`;
   const box = $('#elist');
@@ -111,6 +111,7 @@ views.vault = guard(async (arg) => {
     else if (qk) SB.withSecret(Number(qk.dataset.quick), qk.dataset.ref, val => SB.copy(val, 'Password copied'));
     else if (!ev.target.closest('a,button') && ev.target.closest('.erow')) location.hash = '#entry/' + ev.target.closest('.erow').dataset.id;
   };
+  if ($('#printList')) $('#printList').onclick = () => { const ids = (curIds || activeTags.size ? list.filter(e => (!curIds || curIds.has(e.id)) && [...activeTags].every(t => e.tags.includes(t))) : list.filter(e => tabId === 'all' || e.tabId === tabId)).map(e => e.id); SB.printDialog(ids, { title: ids.length + ' entries', hasKids: false, many: true }); };
   if ($('#expand')) { $('#expand').onclick = () => { for (const id of kids.keys()) openSet.add(id); saveOpen(); draw(); }; $('#collapse').onclick = () => { openSet.clear(); saveOpen(); draw(); }; }
 });
 
@@ -142,7 +143,7 @@ views.entry = guard(async (id) => {
     return `<tr><td>${esc(fd.label)}</td><td>${html} ${fd.type !== 'date' ? `<button class="small ghost" data-plain="${esc(fd.key)}" title="Copy">⧉</button>` : ''}</td></tr>`;
   }).join('');
   v.innerHTML = `<div class="crumbs"><a href="#vault/${e.tabId}">${esc(tab.icon)} ${esc(tab.name)}</a>${e.path.map(p => ` › <a href="#entry/${p.id}">${esc(p.title)}</a>`).join('')}</div>
-    <div class="detail-head"><h1>${esc(e.title)} ${e.favorite ? '<span class="warn">★</span>' : ''}</h1>${e.subtitle ? `<span class="muted">${esc(e.subtitle)}</span>` : ''}<span class="grow"></span>
+    <div class="detail-head"><h1>${esc(e.title)} ${e.favorite ? '<span class="warn">★</span>' : ''}</h1>${e.subtitle ? `<span class="muted">${esc(e.subtitle)}</span>` : ''}<span class="grow"></span><button id="ePrint" title="Print this entry">Print…</button>
       ${isAdmin() ? `<a href="#edit/${e.id}"><button class="primary">Edit</button></a><a href="#new/${e.tabId}/${e.id}"><button>Add nested</button></a><button id="eMove">Move</button><button id="eTpl" title="Use this entry's structure for new ones">Save as template</button><button class="danger" id="eDel">Delete</button>` : ''}</div>
     <div class="tiny muted" style="margin:-4px 0 10px">${e.tags.map(SB.tagBadge).join('')} created ${fmtDate(e.created)} · edited ${fmtAgo(e.updated)}</div>
     <div class="grid2">
@@ -166,6 +167,7 @@ views.entry = guard(async (id) => {
   $$('[data-user]', v).forEach(b => { b.onclick = () => SB.copy(b.dataset.user, 'Copied', false); });
   if ($('#toggleEmpty')) $('#toggleEmpty').onclick = () => { store.set('hideEmpty', hideEmpty ? '0' : '1'); UI.route(); };
   $$('[data-text]', v).forEach(b => { b.onclick = () => SB.copy(b.dataset.text, 'Copied', false); });
+  $('#ePrint').onclick = () => SB.printDialog([e.id], { title: e.title, hasKids: kids.length > 0 });
   if ($('#eTpl')) $('#eTpl').onclick = () => {
     const card = openModal(`<h2>Save as template</h2><div class="path">Keeps the type, tags, spec names, account names and interface names. Never a password or a secret.</div>
       <div class="field"><label>Name</label><input type="text" id="tpName" value="${esc(e.title)}" autocomplete="off"></div>
@@ -284,11 +286,12 @@ async function editor(mode, arg) {
   const wire = () => {
     $('#eTab').onchange = () => { collect(); render(); };
     $('#eCancel').onclick = () => { location.hash = existing ? '#entry/' + existing.id : '#vault'; };
+    const boxOf = (b) => b.closest('.secretin') || b.closest('.inline');
     const meter = (inp) => { const w = inp.closest('.secretin') && inp.closest('.secretin').querySelector('.meterwrap'); if (w && inp.type !== 'textarea' && inp.dataset.f && /password/i.test((tabs.find(t => t.id === draft.tabId).fields.find(f => f.key === inp.dataset.f) || {}).type || '')) w.innerHTML = inp.value ? SB.meterHtml(window.strengthBits(inp.value)) : ''; };
     $$('[data-caddy]').forEach(cb => { cb.onchange = () => { const n = cb.closest('.field').querySelector('[data-port]'); n.disabled = cb.checked; if (cb.checked) n.value = ''; }; });
     $$('[data-secret]').forEach(inp => { inp.addEventListener('input', () => { inp.dataset.dirty = '1'; meter(inp); }); });
-    $$('[data-eye]').forEach(b => { b.onclick = () => { const i = b.closest('.secretin, .inline').querySelector('input'); i.type = i.type === 'password' ? 'text' : 'password'; b.textContent = i.type === 'password' ? 'Show' : 'Hide'; }; });
-    $$('[data-gen]').forEach(b => { b.onclick = () => SB.generatorModal((pw) => { const i = b.closest('.secretin, .inline').querySelector('input'); i.value = pw; i.dataset.dirty = '1'; i.type = 'text'; meter(i); const eye = b.closest('.secretin, .inline').querySelector('[data-eye]'); if (eye) eye.textContent = 'Hide'; }, b.dataset.gen || null); });
+    $$('[data-eye]').forEach(b => { b.onclick = () => { const i = boxOf(b).querySelector('input'); i.type = i.type === 'password' ? 'text' : 'password'; b.textContent = i.type === 'password' ? 'Show' : 'Hide'; }; });
+    $$('[data-gen]').forEach(b => { b.onclick = () => SB.generatorModal((pw) => { const i = boxOf(b).querySelector('input, textarea'); i.value = pw; i.dataset.dirty = '1'; i.type = 'text'; meter(i); const eye = boxOf(b).querySelector('[data-eye]'); if (eye) eye.textContent = 'Hide'; }, b.dataset.gen || null); });
     $$('[data-addtag]').forEach(a => { a.onclick = () => { const i = $('#eTags'), cur = i.value.split(',').map(x => x.trim()).filter(Boolean); if (!cur.includes(a.dataset.addtag)) cur.push(a.dataset.addtag); i.value = cur.join(', '); }; });
     $('#addNic').onclick = () => { collect(); draft.nics.push({ label: '', ip: '', mac: '' }); render(); focusLast('.nicrow'); };
     $$('[data-undo]').forEach(b => { b.onclick = () => { collect(); const key = b.closest('.secretin').querySelector('[data-f]').dataset.f; delete draft.secrets[key]; render(); }; });
@@ -389,11 +392,11 @@ views.trash = guard(async () => {
 });
 
 // ---------- activity (the vault's own audit trail) ----------------------------------------------------------------------
-const ACTIONS = { vault_created: 'Vault created', unlock: 'Unlocked', unlock_failed: 'Failed unlock', unlock_blocked: 'Unlock blocked (too many failures)', lock: 'Locked', autolock: 'Auto-locked (idle)', reveal: 'Secret shown or copied', totp: 'Authenticator code shown', entry_created: 'Entry created', entry_saved: 'Entry edited', entry_moved: 'Entry moved', entry_trashed: 'Moved to trash', entry_restored: 'Restored from trash', entries_purged: 'Deleted for good', csv_import: 'CSV imported', tab_created: 'Type created', tab_saved: 'Type edited', tab_deleted: 'Type deleted', unlock_method_changed: 'Unlock method changed', recovery_key_renewed: 'New recovery key', backup_downloaded: 'Backup downloaded', vault_reset: 'Empty vault reset' };
+const ACTIONS = { vault_created: 'Vault created', unlock: 'Unlocked', unlock_failed: 'Failed unlock', unlock_blocked: 'Unlock blocked (too many failures)', lock: 'Locked', autolock: 'Auto-locked (idle)', reveal: 'Secret shown or copied', totp: 'Authenticator code shown', entry_created: 'Entry created', entry_saved: 'Entry edited', entry_moved: 'Entry moved', entry_trashed: 'Moved to trash', entry_restored: 'Restored from trash', entries_purged: 'Deleted for good', csv_import: 'CSV imported', print: 'Printed', tab_created: 'Type created', tab_saved: 'Type edited', tab_deleted: 'Type deleted', unlock_method_changed: 'Unlock method changed', recovery_key_renewed: 'New recovery key', backup_downloaded: 'Backup downloaded', vault_reset: 'Empty vault reset' };
 views.activity = guard(async () => {
   const v = UI.view();
   const rows = await api.vault.audit(500);
-  const cls = (a) => (/failed|blocked/.test(a) ? 'bad' : /reveal|totp|method|recovery|purged|backup|reset|csv/.test(a) ? 'warn' : '');
+  const cls = (a) => (/failed|blocked/.test(a) ? 'bad' : /reveal|totp|method|recovery|purged|backup|reset|csv|print/.test(a) ? 'warn' : '');
   v.innerHTML = `<h1>Activity</h1><p class="lead">Who unlocked the vault and who looked at which secret. Entry names are shown only while the vault is open; the log itself never holds a secret.</p>
     <div class="card scroll-x"><table><thead><tr><th>When</th><th>What</th><th>Entry</th><th>Who</th><th>Address</th><th>Detail</th></tr></thead><tbody>${rows.map(r => `<tr><td class="muted nowrap">${fmtDate(r.ts)}</td><td class="${cls(r.action)}">${esc(ACTIONS[r.action] || r.action)}</td><td class="wrap">${r.entry ? (r.entry.tab ? link(r.entry_id, r.entry.title) : esc(r.entry.title)) : ''}</td><td>${esc(r.actor || '')}</td><td class="muted">${esc(r.ip || '')}</td><td class="muted tiny">${esc(r.detail || '')}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Nothing yet.</td></tr>'}</tbody></table></div>`;
 });

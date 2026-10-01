@@ -306,6 +306,32 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     if (!base32Decode(seed).length) throw new Error('The stored seed is not valid');
     return { code: totp(seed, now), remaining: 30 - Math.floor(now / 1000) % 30 };
   });
+  // Everything needed to print entries: structure and values, with secrets only when asked (each print is audited as a whole).
+  api('entries:print', (a, ids, opts = {}) => {
+    const withSecrets = !!opts.secrets, tabs = tabMap(), docs = [], seen = new Set();
+    const kidsOf = (id) => db.all('SELECT id FROM entries WHERE parent_id=? AND deleted IS NULL ORDER BY id', id).map(r => r.id);
+    const mask = (v) => (v ? (withSecrets ? v : '••••••••') : '');
+    const visit = (id, depth) => {
+      if (seen.has(id) || docs.length >= 500) return;
+      seen.add(id);
+      const row = rowOf(id); if (!row || row.deleted) return;
+      const e = { ...blank(), ...openEntry(row) }, tab = tabOfRow(row, tabs);
+      const fields = [];
+      for (const fd of tab.fields) {
+        const v = e.fields[fd.key]; if (!v) continue;
+        const secret = T.SECRET_TYPES.has(fd.type);
+        fields.push({ label: fd.label, value: secret ? mask(v) : fd.type === 'port' && v === 'caddy' ? 'via Caddy' : v, secret, mono: secret || ['ip', 'mac', 'port'].includes(fd.type) });
+      }
+      const path = []; let p = row.parent_id;
+      for (let i = 0; p && i < 20; i++) { const pr = rowOf(p); if (!pr) break; path.unshift(openEntry(pr).title); p = pr.parent_id; }
+      docs.push({ id: row.id, depth, title: e.title, subtitle: e.subtitle, type: tab.name, path, tags: e.tags, fields, notes: opts.notes === false ? '' : e.notes, specs: opts.notes === false ? [] : e.specs, nics: e.nics,
+        accounts: e.creds.map(c => ({ label: c.label, user: c.user, url: c.url, note: c.note || '', password: mask(c.secret), totp: mask(c.totp) })), created: row.created, updated: row.updated });
+      if (opts.children) for (const k of kidsOf(row.id)) visit(k, depth + 1);
+    };
+    for (const id of (Array.isArray(ids) ? ids : [ids]).slice(0, 500)) visit(Number(id), 0);
+    audit(a, 'print', docs[0] ? docs[0].id : null, `${docs.length} entr${docs.length === 1 ? 'y' : 'ies'}${withSecrets ? ', with secrets' : ''}`);
+    return { docs, secrets: withSecrets, at: Date.now() };
+  });
   api('entries:delete', (a, id) => {
     const row = rowOf(id); if (!row || row.deleted) throw new Error('No such entry');
     const ids = [row.id, ...descendants(row.id)], ts = Date.now();

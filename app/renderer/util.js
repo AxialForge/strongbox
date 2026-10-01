@@ -159,6 +159,48 @@
     generatorPanel($('#genBox', card), { presetId, onUse: (pw) => { window.UI.closeModal(); onUse(pw); } });
   }
 
+  // ---------- printing ------------------------------------------------------------------------------
+  const escH = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const PRINT_CSS = `body{font:12px/1.45 "Segoe UI",Arial,sans-serif;color:#111;margin:22px}h1{font-size:18px;margin:0 0 2px}.sub{color:#666;margin-bottom:14px;font-size:11px}
+    .e{border:1px solid #bbb;border-radius:6px;padding:10px 12px;margin:0 0 12px;page-break-inside:avoid}.e h2{font-size:15px;margin:0}.e .m{color:#666;font-size:11px;margin-bottom:6px}
+    table{border-collapse:collapse;width:100%;margin-top:4px}td,th{border-top:1px solid #ddd;padding:3px 6px;text-align:left;vertical-align:top}th{font-size:10px;text-transform:uppercase;color:#666;border-top:0}
+    td.k{width:150px;color:#555}.mono{font-family:Consolas,monospace}.h{font-size:10px;text-transform:uppercase;color:#666;margin:8px 0 0;letter-spacing:.06em}
+    .warn{border:2px solid #b00;color:#b00;padding:6px 10px;margin-bottom:12px;font-weight:600}.n{white-space:pre-wrap}.nest{margin-left:22px}.tag{border:1px solid #999;border-radius:9px;padding:0 6px;font-size:10px;margin-right:3px}
+    @media print{body{margin:10mm}}`;
+  function printHtml(res) {
+    const doc = (d) => {
+      const kv = (rows) => rows.length ? `<table>${rows.join('')}</table>` : '';
+      const rows = d.fields.map(f => `<tr><td class="k">${escH(f.label)}</td><td class="${f.mono ? 'mono' : ''}">${escH(f.value)}</td></tr>`);
+      const accts = d.accounts.length ? `<div class="h">Accounts</div><table><tr><th>Account</th><th>User</th><th>Password</th><th>2FA seed</th><th>Note</th></tr>${d.accounts.map(c => `<tr><td>${escH(c.label)}${c.url ? `<br><small>${escH(c.url)}</small>` : ''}</td><td class="mono">${escH(c.user)}</td><td class="mono">${escH(c.password)}</td><td class="mono">${escH(c.totp)}</td><td>${escH(c.note)}</td></tr>`).join('')}</table>` : '';
+      const nics = d.nics.length ? `<div class="h">Network interfaces</div><table><tr><th>Name</th><th>IP address</th><th>MAC address</th></tr>${d.nics.map(n => `<tr><td>${escH(n.label)}</td><td class="mono">${escH(n.ip)}</td><td class="mono">${escH(n.mac)}</td></tr>`).join('')}</table>` : '';
+      const specs = d.specs.length ? `<div class="h">Specs</div>${kv(d.specs.map(s => `<tr><td class="k">${escH(s.k)}</td><td>${escH(s.v)}</td></tr>`))}` : '';
+      return `<div class="e ${d.depth ? 'nest' : ''}"><h2>${escH(d.title)}</h2><div class="m">${escH([d.type, ...d.path].join(' › '))}${d.subtitle ? ' · ' + escH(d.subtitle) : ''} ${d.tags.map(t => `<span class="tag">${escH(t)}</span>`).join('')}</div>${kv(rows)}${accts}${nics}${specs}${d.notes ? `<div class="h">Notes</div><div class="n">${escH(d.notes)}</div>` : ''}</div>`;
+    };
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Strongbox</title><style>${PRINT_CSS}</style></head><body><h1>Strongbox</h1><div class="sub">Printed ${escH(new Date(res.at).toLocaleString())} · ${res.docs.length} entr${res.docs.length === 1 ? 'y' : 'ies'}${res.secrets ? '' : ' · passwords and secrets hidden'}</div>${res.secrets ? '<div class="warn">This page contains passwords and secrets in clear text. Keep it somewhere safe and shred it when you are done.</div>' : ''}${res.docs.map(doc).join('')}</body></html>`;
+  }
+  /** Prints through a hidden frame, so no pop-up is needed. */
+  function printFrame(html) {
+    const f = document.createElement('iframe');
+    f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+    f.srcdoc = html;
+    f.onload = () => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { toast('Printing was blocked: ' + e.message, true); } setTimeout(() => f.remove(), 60000); };
+    document.body.append(f);
+  }
+  /** Asks what to include, then prints. ids: the entries; opts: { title, hasKids, many } */
+  function printDialog(ids, { title = '', hasKids = false, many = false } = {}) {
+    const card = window.UI.openModal(`<h2>Print ${esc(title)}</h2><div class="path">A clean page without the app around it. Choose what goes on paper.</div>
+      ${hasKids ? '<div class="field"><label>Nested</label><label class="inline small"><input type="checkbox" id="pkKids" checked> include the entries nested under it</label></div>' : ''}
+      <div class="field"><label>Notes</label><label class="inline small"><input type="checkbox" id="pkNotes" checked> include notes and specs</label></div>
+      <div class="field"><label>Passwords</label><div><label class="inline small"><input type="checkbox" id="pkSecrets"> include passwords, PINs, keys and 2FA seeds in clear text</label><div class="hint tiny muted" id="pkHint">Off: they print as dots. Printing secrets is logged in Activity.</div></div></div>
+      <div class="actions"><span class="grow"></span><button id="pkCancel">Cancel</button><button class="primary" id="pkGo">Print</button></div>`);
+    $('#pkSecrets', card).onchange = (e) => { $('#pkHint', card).innerHTML = e.target.checked ? '<span class="warn">Anyone who finds the paper can use them. Keep it safe and shred it afterwards.</span>' : 'Off: they print as dots. Printing secrets is logged in Activity.'; };
+    $('#pkCancel', card).onclick = window.UI.closeModal;
+    $('#pkGo', card).onclick = async () => {
+      const opts = { children: !!($('#pkKids', card) && $('#pkKids', card).checked), notes: $('#pkNotes', card).checked, secrets: $('#pkSecrets', card).checked };
+      try { const res = await api().entries.print(ids, opts); window.UI.closeModal(); if (!res.docs.length) return toast('Nothing to print', true); printFrame(printHtml(res)); } catch (e) { toast(e.message, true); }
+    };
+  }
+
   // ---------- tags ----------------------------------------------------------------------------------
   const tagBadge = (name) => { const c = SB.tagColors[name]; return `<span class="badge tag ${c ? 'tc-' + c : ''}">${esc(name)}</span>`; };
   async function loadTags() { try { SB.tagColors = Object.fromEntries((await api().tags.list()).map(t => [t.name, t.color])); } catch { /* locked */ } return SB.tagColors; }
@@ -185,5 +227,5 @@
   }
   const MASK = '••••••••••';
 
-  Object.assign(SB, { copy, download, generate, generatorPanel, generatorModal, GEN_PRESETS, meterHtml, strengthLabel, withSecret, wireSecrets, MASK, writeClipboard, tagBadge, loadTags });
+  Object.assign(SB, { printDialog, printHtml, copy, download, generate, generatorPanel, generatorModal, GEN_PRESETS, meterHtml, strengthLabel, withSecret, wireSecrets, MASK, writeClipboard, tagBadge, loadTags });
 })();

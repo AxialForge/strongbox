@@ -95,9 +95,9 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   const tabMap = () => new Map(tabList().map(t => [t.id, t]));
   const rowOf = (id) => db.get('SELECT * FROM entries WHERE id=?', Number(id));
   const openEntry = (r) => vault.open(r.blob, `entry/${r.id}`);
-  const blank = () => ({ title: '', subtitle: '', fields: {}, creds: [], specs: [], nics: [], notes: '', tags: [], favorite: false, rotateDays: 0, changed: {}, hist: {} });
+  const blank = () => ({ title: '', subtitle: '', fields: {}, creds: [], specs: [], nics: [], notes: '', tags: [], favorite: false, rotateDays: 0, visibleTo: [], changed: {}, hist: {} });
   /** Everything not in the trash, decrypted: [{ row, e }]. */
-  const everything = (trash = false) => db.all(`SELECT * FROM entries WHERE deleted IS ${trash ? 'NOT ' : ''}NULL ORDER BY id`).map(row => ({ row, e: { ...blank(), ...openEntry(row) } }));
+  const everything = (trash = false, a = null) => db.all(`SELECT * FROM entries WHERE deleted IS ${trash ? 'NOT ' : ''}NULL ORDER BY id`).map(row => ({ row, e: { ...blank(), ...openEntry(row) } })).filter(x => !a || canSee(a, x.e));
   const tabOfRow = (row, tabs) => tabs.get(row.tab_id) || { id: row.tab_id, name: '(missing tab)', icon: '?', fields: [] };
 
   const plainFields = (e, tab, full) => {
@@ -112,8 +112,8 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   };
   // The secret a row's copy button copies: the first password that is set, else the first login's.
   const quickRef = (e, tab) => { const fd = tab.fields.find(f => f.type === 'password' && e.fields[f.key]); if (fd) return 'field:' + fd.key; const c = e.creds.find(x => x.secret); return c ? 'cred:' + c.id : null; };
-  const light = (row, e, tab) => ({ id: row.id, tabId: row.tab_id, parentId: row.parent_id, title: e.title, subtitle: e.subtitle, tags: e.tags, favorite: !!e.favorite, created: row.created, updated: row.updated, fields: plainFields(e, tab, false), accounts: e.creds.length, rotateDays: e.rotateDays || 0, quick: quickRef(e, tab) });
-  function full(row, e, tab) {
+  const light = (row, e, tab) => ({ id: row.id, tabId: row.tab_id, parentId: row.parent_id, title: e.title, subtitle: e.subtitle, tags: e.tags, favorite: !!e.favorite, created: row.created, updated: row.updated, fields: plainFields(e, tab, false), accounts: e.creds.length, rotateDays: e.rotateDays || 0, restricted: !!(e.visibleTo && e.visibleTo.length), quick: quickRef(e, tab) });
+  function full(row, e, tab, a = null) {
     const secrets = {};
     for (const fd of tab.fields) {
       if (!T.SECRET_TYPES.has(fd.type)) continue;
@@ -121,18 +121,21 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       secrets[fd.key] = { set: !!v, changed: e.changed[fd.key] || null, bits: fd.type === 'password' && v ? T.strengthBits(v) : undefined, history: (e.hist[fd.key] || []).map(h => ({ t: h.t })) };
     }
     const path = []; let p = row.parent_id;
-    for (let i = 0; p && i < 50; i++) { const pr = rowOf(p); if (!pr) break; path.unshift({ id: pr.id, title: openEntry(pr).title }); p = pr.parent_id; }
+    for (let i = 0; p && i < 50; i++) { const pr = rowOf(p); if (!pr) break; const pe = { ...blank(), ...openEntry(pr) }; if (!canSee(a, pe)) break; path.unshift({ id: pr.id, title: pe.title }); p = pr.parent_id; }
     return {
       ...light(row, e, tab), deleted: row.deleted || null, fields: plainFields(e, tab, true), secrets, path,
       creds: e.creds.map(c => ({ id: c.id, label: c.label, user: c.user, url: c.url, note: c.note || '', hasTotp: !!c.totp, set: !!c.secret, changed: e.changed['cred:' + c.id] || null, bits: c.secret ? T.strengthBits(c.secret) : undefined, history: (e.hist['cred:' + c.id] || []).map(h => ({ t: h.t })) })),
-      specs: e.specs, nics: e.nics, notes: e.notes,
+      specs: e.specs, nics: e.nics, notes: e.notes, visibleTo: e.visibleTo || [],
     };
   }
   // Standard accounts listed in settings may see entries but never passwords, keys, 2FA codes or attachments.
   const canReveal = (a) => !(a && a.user && a.role && a.role !== 'admin' && (cfg().noReveal || []).includes(a.user));
+  // An entry can be limited to some accounts: visibleTo is empty (everyone who can sign in), ['@admins'] (admins only),
+  // or a list of user names. Admins and the core itself (no account) see everything.
+  const canSee = (a, e) => !a || !a.role || a.role === 'admin' || !(e.visibleTo && e.visibleTo.length) || e.visibleTo.includes(a.user);
   const denyReveal = (a) => { if (!canReveal(a)) throw new Error('Your account can see entries but not their passwords'); };
   const filesOf = (entryId) => db.all('SELECT id, created, size, meta FROM files WHERE entry_id=? ORDER BY id', entryId).map(r => ({ id: r.id, created: r.created, size: r.size, ...vault.open(r.meta, `filemeta/${r.id}`) }));
-  const present = (id, a) => { const row = rowOf(id); if (!row) throw new Error('No such entry'); const tabs = tabMap(); const f = full(row, { ...blank(), ...openEntry(row) }, tabOfRow(row, tabs)); f.canReveal = canReveal(a); f.files = filesOf(row.id); return f; };
+  const present = (id, a) => { const row = rowOf(id); if (!row) throw new Error('No such entry'); const tabs = tabMap(); const e0 = { ...blank(), ...openEntry(row) }; if (!canSee(a, e0)) throw new Error('No such entry'); const f = full(row, e0, tabOfRow(row, tabs), a); f.canReveal = canReveal(a); f.files = filesOf(row.id); return f; };
 
   // ---- writing -----------------------------------------------------------------------------
   function descendants(id, deleted = false) {
@@ -187,6 +190,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     e.tags = [...new Set((Array.isArray(input.tags) ? input.tags : []).map(t => clip(t, 40).trim().toLowerCase()).filter(Boolean))].slice(0, 30);
     e.specs = (Array.isArray(input.specs) ? input.specs : []).map(s => ({ k: clip(s.k, 60).trim(), v: clip(s.v, 300).trim() })).filter(s => s.k || s.v).slice(0, 100);
     e.rotateDays = 'rotateDays' in input ? Math.max(0, Math.min(3650, Math.floor(Number(input.rotateDays)) || 0)) : prev.rotateDays || 0;
+    e.visibleTo = 'visibleTo' in input ? [...new Set((Array.isArray(input.visibleTo) ? input.visibleTo : []).map(u => clip(u, 40).trim()).filter(Boolean))].slice(0, 50) : prev.visibleTo || [];
     e.nics = (Array.isArray(input.nics) ? input.nics : []).map(n => ({ label: clip(n.label, 60).trim(), ip: T.normIp(n.ip), mac: T.normMac(n.mac) })).filter(n => n.label || n.ip || n.mac).slice(0, 30);
     for (const fd of tab.fields) {
       if (T.SECRET_TYPES.has(fd.type)) {
@@ -278,12 +282,12 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   });
 
   // ---- entries -----------------------------------------------------------------------------
-  api('entries:list', (a) => { const tabs = tabMap(), ok = canReveal(a); return everything().map(({ row, e }) => { const l = light(row, e, tabOfRow(row, tabs)); if (!ok) l.quick = null; return l; }); });
+  api('entries:list', (a) => { const tabs = tabMap(), ok = canReveal(a); return everything(false, a).map(({ row, e }) => { const l = light(row, e, tabOfRow(row, tabs)); if (!ok) l.quick = null; return l; }); });
   api('entries:search', (a, q) => {
     const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return [];
     const tabs = tabMap();
-    return everything().filter(({ row, e }) => {
+    return everything(false, a).filter(({ row, e }) => {
       const tab = tabOfRow(row, tabs);
       const hay = [e.title, e.subtitle, e.tags.join(' '), e.notes, e.specs.map(s => `${s.k} ${s.v}`).join(' '), e.creds.map(c => `${c.label} ${c.user} ${c.url} ${c.note || ''}`).join(' '), e.nics.map(n => `${n.label} ${n.ip} ${n.mac}`).join(' '), tab.name, ...tab.fields.filter(fd => !T.SECRET_TYPES.has(fd.type)).map(fd => e.fields[fd.key] || '')].join('\n').toLowerCase();
       return words.every(w => hay.includes(w));
@@ -304,6 +308,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     denyReveal(a);
     const row = rowOf(id); if (!row) throw new Error('No such entry');
     const e = { ...blank(), ...openEntry(row) };
+    if (!canSee(a, e)) throw new Error('No such entry');
     const m = /^(field|cred|hist):(.+)$/.exec(String(ref || '')); if (!m) throw new Error('Nothing to reveal');
     let value, detail = String(ref);
     if (m[1] === 'field') value = e.fields[m[2]];
@@ -317,6 +322,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     denyReveal(a);
     const row = rowOf(id); if (!row) throw new Error('No such entry');
     const e = openEntry(row), ck = String(key);
+    if (!canSee(a, { ...blank(), ...e })) throw new Error('No such entry');
     const seed = ck.startsWith('cred:') ? ((e.creds || []).find(x => 'cred:' + x.id === ck) || {}).totp : (e.fields || {})[ck];
     if (!seed) throw new Error('No authenticator seed set');
     const now = Date.now();
@@ -336,6 +342,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       seen.add(id);
       const row = rowOf(id); if (!row || row.deleted) return;
       const e = { ...blank(), ...openEntry(row) }, tab = tabOfRow(row, tabs);
+      if (!canSee(a, e)) return;
       const fields = [];
       for (const fd of tab.fields) {
         const v = e.fields[fd.key]; if (!v) continue;
@@ -461,12 +468,12 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     db.transaction(() => { for (const { row, e } of everything().concat(everything(true))) if (fn(e)) { db.run('UPDATE entries SET blob=? WHERE id=?', vault.seal(e, `entry/${row.id}`), row.id); n++; } });
     return n;
   }
-  const listTags = () => {
+  const listTags = (a = null) => {
     const reg = getPref('tags', {}), counts = new Map();
-    for (const { e } of everything()) for (const t of e.tags) counts.set(t, (counts.get(t) || 0) + 1);
+    for (const { e } of everything(false, a)) for (const t of e.tags) counts.set(t, (counts.get(t) || 0) + 1);
     return [...new Set([...Object.keys(reg), ...counts.keys()])].sort().map(name => ({ name, color: (reg[name] && reg[name].color) || '', count: counts.get(name) || 0 }));
   };
-  api('tags:list', () => listTags());
+  api('tags:list', (a) => listTags(a));
   api('tags:save', (a, t = {}) => {
     const name = clip(t.name, 40).trim().toLowerCase(), to = clip(t.newName, 40).trim().toLowerCase();
     if (!name) throw new Error('A tag needs a name');
@@ -515,9 +522,9 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   api('templates:delete', (a, id) => { setPref('templates', getPref('templates', []).filter(x => x.id !== id)); audit(a, 'template_deleted'); return listTemplates(); });
 
   // Every IP and MAC address in the vault in one table (IP / MAC fields and the extra network interfaces).
-  api('network:list', () => {
+  api('network:list', (a) => {
     const tabs = tabMap(), rows = [];
-    for (const { row, e } of everything()) {
+    for (const { row, e } of everything(false, a)) {
       const tab = tabOfRow(row, tabs), base = { id: row.id, title: e.title, tabId: row.tab_id, tab: tab.name };
       const ips = tab.fields.filter(fd => fd.type === 'ip'), macs = tab.fields.filter(fd => fd.type === 'mac');
       for (let i = 0; i < Math.max(ips.length, macs.length); i++) {
@@ -573,11 +580,11 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   api('breach:status', () => ({ builtin: COMMON.length, custom: loadBreach().length, at: (() => { try { return fs.statSync(breachFile).mtimeMs; } catch { return null; } })() }), { data: false });
   api('breach:clear', (a) => { try { fs.unlinkSync(breachFile); } catch { /* none */ } breachCache = null; audit(a, 'breach_list_cleared'); return { builtin: COMMON.length, custom: 0, at: null }; }, { data: false });
 
-  function health() {
+  function health(a = null) {
     const c = cfg(), now = Date.now(), tabs = tabMap(), staleMs = (Number(c.staleDays) || 0) * DAY;
     const out = { weak: [], reused: [], stale: [], expiring: [], due: [], breached: [], total: 0, passwords: 0, at: now };
     const groups = new Map();
-    for (const { row, e } of everything()) {
+    for (const { row, e } of everything(false, a)) {
       out.total++;
       const tab = tabOfRow(row, tabs), base = { id: row.id, title: e.title, tabId: row.tab_id };
       const checks = [...tab.fields.filter(fd => fd.type === 'password').map(fd => ({ label: fd.label, v: e.fields[fd.key], at: e.changed[fd.key] })), ...e.creds.map(cr => ({ label: cr.label || 'Login', v: cr.secret, at: e.changed['cred:' + cr.id] }))];
@@ -603,15 +610,15 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     let g = 0;
     for (const members of groups.values()) if (members.length > 1) { g++; for (const m of members) out.reused.push({ ...m, group: g, with: members.length - 1 }); }
     out.expiring.sort((x, y) => x.days - y.days); out.weak.sort((x, y) => x.bits - y.bits); out.stale.sort((x, y) => y.days - x.days); out.due.sort((x, y) => y.days - x.days);
-    db.kvSet('healthCache', { at: now, total: out.total, weak: out.weak.length, reused: out.reused.length, stale: out.stale.length, expiring: out.expiring.length, due: out.due.length, breached: out.breached.length });
+    if (!a || !a.role || a.role === 'admin') db.kvSet('healthCache', { at: now, total: out.total, weak: out.weak.length, reused: out.reused.length, stale: out.stale.length, expiring: out.expiring.length, due: out.due.length, breached: out.breached.length });
     return out;
   }
-  api('vault:health', () => health());
-  api('data:dashboard', () => {
+  api('vault:health', (a) => health(a));
+  api('data:dashboard', (a) => {
     const st = vault.status(), cache = db.kvGet('healthCache', null);
     if (st.state !== 'unlocked') return { state: st.state, mode: st.mode, health: cache };
     vault.touch();
-    const tabs = tabList(), list = everything(), h = health();
+    const tabs = tabList(), list = everything(false, a), h = health(a);
     const brief = ({ row, e }) => ({ id: row.id, title: e.title, tabId: row.tab_id, updated: row.updated });
     return {
       state: 'unlocked', mode: st.mode, lockInMs: vault.lockInMs(), total: list.length,
@@ -620,7 +627,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       expiring: h.expiring.slice(0, 8),
       recent: [...list].sort((x, y) => y.row.updated - x.row.updated).slice(0, 8).map(brief),
       favorites: list.filter(x => x.e.favorite).slice(0, 12).map(brief),
-      trash: db.get('SELECT COUNT(*) n FROM entries WHERE deleted IS NOT NULL').n,
+      trash: a && a.role && a.role !== 'admin' ? 0 : db.get('SELECT COUNT(*) n FROM entries WHERE deleted IS NOT NULL').n,
     };
   }, { data: false });
   // Home Assistant status: counts only, from the last time the vault was open. Never any content.
@@ -709,6 +716,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     read(a, id) {
       vault.require(); denyReveal(a);
       const r = db.get('SELECT * FROM files WHERE id=?', Number(id)); if (!r) throw new Error('No such file');
+      const owner = rowOf(r.entry_id); if (owner && !canSee(a, { ...blank(), ...openEntry(owner) })) throw new Error('No such file');
       audit(a, 'file_downloaded', r.entry_id, `file ${r.id}`);
       return { ...vault.open(r.meta, `filemeta/${r.id}`), data: vault.openBytes(r.data, `file/${r.id}`) };
     },

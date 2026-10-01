@@ -86,7 +86,7 @@ views.vault = guard(async (arg) => {
       <span class="eicon tc-${esc(t.color || 'blue')}" title="${esc(t.name)}">${esc(t.icon)}</span>
       <div class="emain">${path}<a class="etitle" href="#entry/${e.id}">${esc(e.title)}</a>${e.favorite ? ' <span class="warn">★</span>' : ''}${e.subtitle ? ` <span class="muted">${esc(e.subtitle)}</span>` : ''}
         <div class="tiny muted">${esc(detail(e))}</div></div>
-      <div class="ebadges">${(tabId === 'all' || flat || e.tabId !== tabId) ? tabBadge(t) : ''}${e.tags.slice(0, 3).map(SB.tagBadge).join('')}${e.accounts ? `<span class="badge">${e.accounts} account${e.accounts === 1 ? '' : 's'}</span>` : ''}${k.length ? `<span class="badge c1">${k.length} nested</span>` : ''}</div>
+      <div class="ebadges">${(tabId === 'all' || flat || e.tabId !== tabId) ? tabBadge(t) : ''}${e.tags.slice(0, 3).map(SB.tagBadge).join('')}${e.restricted ? '<span class="badge warn" title="Limited to some accounts">🔒</span>' : ''}${e.accounts ? `<span class="badge">${e.accounts} account${e.accounts === 1 ? '' : 's'}</span>` : ''}${k.length ? `<span class="badge c1">${k.length} nested</span>` : ''}</div>
       <div class="eact">${e.quick ? `<button class="small" data-quick="${e.id}" data-ref="${esc(e.quick)}" title="Copy the password">⧉</button>` : ''}<a class="small" href="#new/${e.tabId}/${e.id}" title="Add a nested entry"><button class="small">＋</button></a></div></div>`;
   };
   const tree = (items, depth = 0) => items.sort(byTitle).map(e => rowHtml(e, depth, false) + (openSet.has(e.id) && kids.get(e.id) ? tree([...kids.get(e.id)], depth + 1) : '')).join('');
@@ -177,7 +177,7 @@ views.entry = guard(async (id) => {
   v.innerHTML = `<div class="crumbs"><a href="#vault/${e.tabId}">${esc(tab.icon)} ${esc(tab.name)}</a>${e.path.map(p => ` › <a href="#entry/${p.id}">${esc(p.title)}</a>`).join('')}</div>
     <div class="detail-head"><h1>${esc(e.title)} ${e.favorite ? '<span class="warn">★</span>' : ''}</h1>${e.subtitle ? `<span class="muted">${esc(e.subtitle)}</span>` : ''}<span class="grow"></span><button id="ePrint" title="Print this entry">Print…</button>${wifi ? '<button id="eQr" title="Show a QR code that joins this network">Wi-Fi QR</button>' : ''}
       ${isAdmin() ? `<a href="#edit/${e.id}"><button class="primary">Edit</button></a><a href="#new/${e.tabId}/${e.id}"><button>Add nested</button></a><button id="eMove">Move</button><button id="eDup" title="Make a copy of this entry">Duplicate</button><button id="eTpl" title="Use this entry's structure for new ones">Save as template</button><button class="danger" id="eDel">Delete</button>` : ''}</div>
-    <div class="tiny muted" style="margin:-4px 0 10px">${e.tags.map(SB.tagBadge).join('')} created ${fmtDate(e.created)} · edited ${fmtAgo(e.updated)}</div>
+    <div class="tiny muted" style="margin:-4px 0 10px">${e.tags.map(SB.tagBadge).join('')}${e.visibleTo.length ? `<span class="badge warn">🔒 ${e.visibleTo.length === 1 && e.visibleTo[0] === '@admins' ? 'admins only' : 'visible to ' + esc(e.visibleTo.filter(x => x !== '@admins').join(', '))}</span> ` : ''} created ${fmtDate(e.created)} · edited ${fmtAgo(e.updated)}</div>
     <div class="grid2">
       <div>
         <div class="card"><h3>Details${emptyCount ? ` <a class="right" id="toggleEmpty" style="cursor:pointer">${hideEmpty ? `show ${emptyCount} empty field${emptyCount === 1 ? '' : 's'}` : 'hide empty fields'}</a>` : ''}</h3><table class="kv dtl">${fieldRows || `<tr><td class="muted">${emptyCount ? 'Nothing filled in yet.' : 'This type has no fields.'}</td></tr>`}</table></div>
@@ -284,16 +284,17 @@ async function editor(mode, arg) {
   let existing = null, draft;
   if (mode === 'edit') {
     existing = await api.entries.get(Number(arg));
-    draft = { id: existing.id, tabId: existing.tabId, parentId: existing.parentId, title: existing.title, subtitle: existing.subtitle, favorite: existing.favorite, tags: existing.tags.join(', '), fields: { ...existing.fields }, secrets: {}, creds: existing.creds.map(c => ({ id: c.id, label: c.label, user: c.user, url: c.url, note: c.note, has: c.set, hasTotp: c.hasTotp })), specs: existing.specs.map(s => ({ ...s })), nics: (existing.nics || []).map(n => ({ ...n })), notes: existing.notes, rotateDays: existing.rotateDays || 0 };
+    draft = { id: existing.id, tabId: existing.tabId, parentId: existing.parentId, title: existing.title, subtitle: existing.subtitle, favorite: existing.favorite, tags: existing.tags.join(', '), fields: { ...existing.fields }, secrets: {}, creds: existing.creds.map(c => ({ id: c.id, label: c.label, user: c.user, url: c.url, note: c.note, has: c.set, hasTotp: c.hasTotp })), specs: existing.specs.map(s => ({ ...s })), nics: (existing.nics || []).map(n => ({ ...n })), notes: existing.notes, rotateDays: existing.rotateDays || 0, visMode: !(existing.visibleTo || []).length ? 'all' : (existing.visibleTo.length === 1 && existing.visibleTo[0] === '@admins') ? 'admins' : 'some', visUsers: (existing.visibleTo || []).filter(x => x !== '@admins') };
   } else if (mode === 'tpl') {
     const [tid, pid] = String(arg || '').split('/');
     const tpl = (await api.templates.list()).find(t => t.id === tid);
     if (!tpl) throw new Error('That template no longer exists');
-    draft = { id: null, tabId: tabs.find(t => t.id === tpl.tabId) ? tpl.tabId : tabs[0].id, parentId: Number(pid) || null, title: '', subtitle: tpl.subtitle || '', favorite: false, tags: tpl.tags.join(', '), fields: { ...tpl.fields }, secrets: {}, creds: tpl.creds.map(c => ({ label: c.label, user: c.user, url: c.url, has: false })), specs: tpl.specs.map(s => ({ ...s })), nics: tpl.nics.map(n => ({ label: n.label, ip: '', mac: '' })), notes: '', rotateDays: 0 };
+    draft = { id: null, tabId: tabs.find(t => t.id === tpl.tabId) ? tpl.tabId : tabs[0].id, parentId: Number(pid) || null, title: '', subtitle: tpl.subtitle || '', favorite: false, tags: tpl.tags.join(', '), fields: { ...tpl.fields }, secrets: {}, creds: tpl.creds.map(c => ({ label: c.label, user: c.user, url: c.url, has: false })), specs: tpl.specs.map(s => ({ ...s })), nics: tpl.nics.map(n => ({ label: n.label, ip: '', mac: '' })), notes: '', rotateDays: 0, visMode: 'all', visUsers: [] };
   } else {
     const [tabId, parentId] = String(arg || '').split('/').map(Number);
-    draft = { id: null, tabId: tabs.find(t => t.id === tabId) ? tabId : tabs[0].id, parentId: parentId || null, title: '', subtitle: '', favorite: false, tags: '', fields: {}, secrets: {}, creds: [], specs: [], nics: [], notes: '', rotateDays: 0 };
+    draft = { id: null, tabId: tabs.find(t => t.id === tabId) ? tabId : tabs[0].id, parentId: parentId || null, title: '', subtitle: '', favorite: false, tags: '', fields: {}, secrets: {}, creds: [], specs: [], nics: [], notes: '', rotateDays: 0, visMode: 'all', visUsers: [] };
   }
+  const stdUsers = (await api.security.users().catch(() => [])).filter(u => u.role === 'standard').map(u => u.username);
   const allTags = await api.tags.list(); SB.tagColors = Object.fromEntries(allTags.map(t => [t.name, t.color]));
   const parent = draft.parentId ? await api.entries.get(draft.parentId).catch(() => null) : null;
   if (mode === 'new' && parent && draft.tabId === parent.tabId) { // a new thing under hardware is usually a service
@@ -301,7 +302,7 @@ async function editor(mode, arg) {
     if (ptab && ptab.builtin === 'hardware' && svcTab) draft.tabId = svcTab.id;
   }
   const collect = () => {
-    draft.tabId = Number($('#eTab').value); draft.title = $('#eTitle').value; draft.subtitle = $('#eSub').value; draft.favorite = $('#eFav').checked; draft.rotateDays = Number($('#eRot').value) || 0; draft.tags = $('#eTags').value; draft.notes = $('#eNotes').value;
+    draft.tabId = Number($('#eTab').value); draft.title = $('#eTitle').value; draft.subtitle = $('#eSub').value; draft.favorite = $('#eFav').checked; draft.rotateDays = Number($('#eRot').value) || 0; draft.visMode = $('#eVis').value; draft.visUsers = $$('[data-vis]').filter(c => c.checked).map(c => c.dataset.vis); draft.tags = $('#eTags').value; draft.notes = $('#eNotes').value;
     const tab = tabs.find(t => t.id === draft.tabId);
     for (const fd of tab.fields) {
       const el = $(`[data-f="${fd.key}"]`); if (!el) continue;
@@ -338,6 +339,7 @@ async function editor(mode, arg) {
           <div class="field"><label>Subtitle</label><input type="text" id="eSub" value="${esc(draft.subtitle)}" placeholder="optional: a short description" autocomplete="off"></div>
           <div class="field"><label>Tags</label><div><input type="text" id="eTags" value="${esc(draft.tags)}" placeholder="comma separated, or click a tag below" autocomplete="off"><div class="tagpick">${allTags.map(t => `<a data-addtag="${esc(t.name)}">${SB.tagBadge(t.name)}</a>`).join('')}</div></div></div>
           <div class="field"><label>Favorite</label><input type="checkbox" id="eFav" ${draft.favorite ? 'checked' : ''}></div>
+          <div class="field"><label>Who can see it</label><div><select id="eVis"><option value="all" ${draft.visMode === 'all' ? 'selected' : ''}>Everyone who can sign in</option><option value="admins" ${draft.visMode === 'admins' ? 'selected' : ''}>Admins only</option><option value="some" ${draft.visMode === 'some' ? 'selected' : ''}>Only these accounts…</option></select><div class="tagpick" style="margin-top:6px" ${draft.visMode === 'some' ? '' : 'hidden'}>${stdUsers.map(u => `<label class="inline small"><input type="checkbox" data-vis="${esc(u)}" ${draft.visUsers.includes(u) ? 'checked' : ''}> ${esc(u)}</label>`).join('') || '<span class="muted small">No standard accounts yet (add one under Security).</span>'}</div><div class="hint tiny muted">Admins always see everything. A hidden entry does not appear in lists, search, print, the network table or the counts of the others.</div></div></div>
           <div class="field"><label>Change passwords every</label><div class="inline"><input type="number" id="eRot" min="0" max="3650" value="${draft.rotateDays || 0}" style="width:90px"> days <span class="muted small">(0 = no reminder; it shows on Health and the dashboard)</span></div></div>
         </div>
         <div class="section-head"><h2>${esc(tab.name)} details</h2></div>
@@ -358,6 +360,7 @@ async function editor(mode, arg) {
   const focusLast = (sel) => { const rows = $$(sel); const last = rows[rows.length - 1]; if (last) { const i = $('input', last); if (i) i.focus({ preventScroll: false }); } };
   const wire = () => {
     $('#eTab').onchange = () => { collect(); render(); };
+    $('#eVis').onchange = () => { collect(); render(); };
     $('#eCancel').onclick = () => { location.hash = existing ? '#entry/' + existing.id : '#vault'; };
     const boxOf = (b) => b.closest('.secretin') || b.closest('.inline');
     const meter = (inp) => { const w = inp.closest('.secretin') && inp.closest('.secretin').querySelector('.meterwrap'); if (w && inp.type !== 'textarea' && inp.dataset.f && /password/i.test((tabs.find(t => t.id === draft.tabId).fields.find(f => f.key === inp.dataset.f) || {}).type || '')) w.innerHTML = inp.value ? SB.meterHtml(window.strengthBits(inp.value)) : ''; };
@@ -373,7 +376,7 @@ async function editor(mode, arg) {
     $('#specPreset').onchange = (ev) => { collect(); const val = ev.target.value; if (!val) return; draft.specs.push({ k: val === '__other' ? '' : val, v: '' }); render(); const rows = $$('.specrow'); const last = rows[rows.length - 1]; if (last) $(val === '__other' ? '.sk' : '.sv', last).focus(); };
     $('#eForm').onsubmit = async (ev) => {
       ev.preventDefault(); collect();
-      const payload = { id: draft.id, tabId: draft.tabId, title: draft.title, subtitle: draft.subtitle, favorite: draft.favorite, rotateDays: draft.rotateDays, tags: draft.tags.split(','), fields: draft.fields, secrets: draft.secrets, creds: draft.creds.map(c => ({ id: c.id, label: c.label, user: c.user, url: c.url, note: c.note, secret: c.secret, totp: c.totp })), specs: draft.specs, nics: draft.nics, notes: draft.notes };
+      const payload = { id: draft.id, tabId: draft.tabId, title: draft.title, subtitle: draft.subtitle, favorite: draft.favorite, rotateDays: draft.rotateDays, visibleTo: draft.visMode === 'all' ? [] : draft.visMode === 'admins' || !draft.visUsers.length ? ['@admins'] : draft.visUsers, tags: draft.tags.split(','), fields: draft.fields, secrets: draft.secrets, creds: draft.creds.map(c => ({ id: c.id, label: c.label, user: c.user, url: c.url, note: c.note, secret: c.secret, totp: c.totp })), specs: draft.specs, nics: draft.nics, notes: draft.notes };
       if (mode !== 'edit' || draft.parentId !== (existing && existing.parentId)) payload.parentId = draft.parentId;
       $('#eSave').disabled = true;
       try { const saved = await api.entries.save(payload); toast('Saved'); location.hash = '#entry/' + saved.id; } catch (e) { $('#eSave').disabled = false; $('#eErr').textContent = e.message; }

@@ -314,6 +314,31 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.strictEqual(call({ user: 'amy', role: 'standard' }, 'entries:reveal', server.id, 'field:pass'), 'a-new-password-99');
   svc.settings.set({ vault: { noReveal: [] } });
 
+  // ---- entries limited to some accounts -------------------------------------------------------------------------
+  const onlyAdmins = H('entries:save', { tabId: hw.id, title: 'Only the admins', tags: ['hush'], fields: { ip: '10.9.9.9' }, secrets: { pass: 'adm-only-pass-1' }, visibleTo: ['@admins'] });
+  const forAmy = H('entries:save', { tabId: hw.id, title: 'For Amy', fields: { ip: '10.9.9.10' }, secrets: { pass: 'amy-only-pass-2' }, visibleTo: ['amy'] });
+  const openKid = H('entries:save', { tabId: hw.id, parentId: onlyAdmins.id, title: 'Open child of a hidden parent' });
+  const [amyU, benU, adm] = [{ user: 'amy', role: 'standard' }, { user: 'ben', role: 'standard' }, { user: 'root', role: 'admin' }];
+  const ids = (a) => call(a, 'entries:list').map(e => e.id);
+  assert.ok(ids(adm).includes(onlyAdmins.id) && ids(adm).includes(forAmy.id) && ids(null === 0 ? adm : { role: undefined }).includes(onlyAdmins.id), 'admins and the core see everything');
+  assert.ok(ids(amyU).includes(forAmy.id) && !ids(amyU).includes(onlyAdmins.id));
+  assert.ok(!ids(benU).includes(forAmy.id) && !ids(benU).includes(onlyAdmins.id) && ids(benU).includes(openKid.id));
+  assert.strictEqual(call(adm, 'entries:list').find(e => e.id === forAmy.id).restricted, true);
+  assert.throws(() => call(benU, 'entries:get', forAmy.id), /No such entry/); assert.throws(() => call(amyU, 'entries:get', onlyAdmins.id), /No such entry/); assert.ok(call(amyU, 'entries:get', forAmy.id).visibleTo[0] === 'amy');
+  assert.throws(() => call(benU, 'entries:reveal', forAmy.id, 'field:pass'), /No such entry/); assert.strictEqual(call(amyU, 'entries:reveal', forAmy.id, 'field:pass'), 'amy-only-pass-2');
+  assert.deepStrictEqual(call(benU, 'entries:search', 'only').filter(i => [onlyAdmins.id, forAmy.id].includes(i)), [], JSON.stringify(call(benU, 'entries:search', 'only'))); assert.ok(call(amyU, 'entries:search', 'For Amy').includes(forAmy.id));
+  assert.ok(!call(benU, 'entries:print', [forAmy.id, onlyAdmins.id], {}).docs.length, 'hidden entries are not printed');
+  assert.deepStrictEqual(call(benU, 'entries:get', openKid.id).path, [], 'a hidden parent does not show in the breadcrumb'); assert.strictEqual(call(adm, 'entries:get', openKid.id).path[0].title, 'Only the admins');
+  assert.ok(!call(benU, 'network:list').some(r => r.ip === '10.9.9.9' || r.ip === '10.9.9.10') && call(adm, 'network:list').some(r => r.ip === '10.9.9.9') && call(amyU, 'network:list').some(r => r.ip === '10.9.9.10'));
+  assert.ok(call(benU, 'vault:health').total < call(adm, 'vault:health').total, 'health counts only what the account can see');
+  assert.ok(call(benU, 'data:dashboard').total < call(adm, 'data:dashboard').total && call(benU, 'data:dashboard').trash === 0);
+  assert.ok(!call(benU, 'tags:list').some(t => t.name === 'hush') && call(adm, 'tags:list').some(t => t.name === 'hush'));
+  const hiddenFile = svc.files.add({}, onlyAdmins.id, 'x.txt', 'text/plain', Buffer.from('hidden file'));
+  assert.throws(() => svc.files.read(benU, hiddenFile[0].id), /No such file/); assert.strictEqual(svc.files.read(adm, hiddenFile[0].id).data.toString(), 'hidden file');
+  assert.deepStrictEqual(H('entries:save', { id: forAmy.id, tabId: hw.id, title: 'For Amy', visibleTo: ['amy', 'ben', ' '] }).visibleTo, ['amy', 'ben']);
+  assert.deepStrictEqual(H('entries:save', { id: forAmy.id, tabId: hw.id, title: 'For Amy', visibleTo: [] }).visibleTo, []); assert.ok(ids(benU).includes(forAmy.id), 'back to everyone');
+  assert.deepStrictEqual(H('entries:save', { id: forAmy.id, tabId: hw.id, title: 'For Amy' }).visibleTo, [], 'an edit that says nothing keeps the setting');
+
   // ---- attachments: encrypted, searchable by nobody, gone with the entry ---------------------------------------
   const FILE_MARK = 'canary-file-bytes-5d2e', FILE_NAME = 'canary-name-serial-plate.png';
   const fl = svc.files.add({ user: 'joe' }, server.id, FILE_NAME, 'image/png', Buffer.from('PNGDATA ' + FILE_MARK));

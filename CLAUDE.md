@@ -119,10 +119,11 @@ remembers which defaults were already offered, so a type the user deleted never 
 - **Who may reveal is decided by the server** (`canReveal(actor)` from `settings.vault.noReveal` and the actor's role); the page only hides the buttons. Anything new that returns a secret must call `denyReveal(a)`.
 - **`rewrap` for a security-key mode forces a fresh recovery key**; applying "keep the old one" afterwards replaced the new record and made the shown recovery key useless. Fixed in 0.8.0 and covered by a test.
 
+- **Visibility is filtered where entries are decrypted** (`everything(trash, actor)` and `canSee(actor, entry)`), not in the page. Any new handler that lists, counts, searches or returns entries for an account must pass the actor through; `healthCache` is only written by admin / core runs so a restricted account's smaller numbers never reach Home Assistant. The editor sends `visibleTo` always; an edit that omits it keeps the old value.
+
 ## Roadmap (unbuilt)
 
 - "Remember this key file on this device" (an opt-in convenience; weakens the second factor).
-- Per-entry sharing between accounts.
 - Test the security-key unlock with real hardware (YubiKey 5 with a recent firmware) and add a second key as a spare.
 
 ## Release

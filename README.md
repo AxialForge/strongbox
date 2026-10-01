@@ -36,6 +36,11 @@ sudo bash strongbox-install.sh
 
 Then add the Caddy site block from [docs/RASPBERRY-PI.md](docs/RASPBERRY-PI.md).
 
+## Documentation
+
+- [docs/RASPBERRY-PI.md](docs/RASPBERRY-PI.md): installing on a Pi, Caddy or built-in HTTPS, hardening, restoring a backup.
+- [docs/TWO-FACTOR.md](docs/TWO-FACTOR.md): how 2FA works (TOTP, recovery codes, security keys) and where Strongbox uses it.
+
 ## Development
 
 Architecture, the extension points and the gotchas are in [CLAUDE.md](CLAUDE.md). The kit under `kit/` is

@@ -120,6 +120,11 @@ h3 .eicon { width: 26px; height: 26px; font-size: 13px; border-radius: 8px; }
 button.ghost { background: transparent; border-color: transparent; color: var(--muted); padding: 1px 6px; }
 button.ghost:hover { color: var(--accent); transform: none; }
 
+.accts { display: grid; gap: 12px; }
+.acct { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: color-mix(in srgb, var(--bg) 70%, var(--panel)); }
+.acct-head { margin-bottom: 4px; }
+.acct .kv td:first-child { width: 90px; }
+
 /* ---- editor ---- */
 .secretin { display: grid; gap: 6px; min-width: 0; }
 .secretin input, .secretin textarea { width: 100%; }

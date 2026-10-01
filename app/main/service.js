@@ -100,7 +100,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   };
   // The secret a row's copy button copies: the first password that is set, else the first login's.
   const quickRef = (e, tab) => { const fd = tab.fields.find(f => f.type === 'password' && e.fields[f.key]); if (fd) return 'field:' + fd.key; const c = e.creds.find(x => x.secret); return c ? 'cred:' + c.id : null; };
-  const light = (row, e, tab) => ({ id: row.id, tabId: row.tab_id, parentId: row.parent_id, title: e.title, subtitle: e.subtitle, tags: e.tags, favorite: !!e.favorite, created: row.created, updated: row.updated, fields: plainFields(e, tab, false), quick: quickRef(e, tab) });
+  const light = (row, e, tab) => ({ id: row.id, tabId: row.tab_id, parentId: row.parent_id, title: e.title, subtitle: e.subtitle, tags: e.tags, favorite: !!e.favorite, created: row.created, updated: row.updated, fields: plainFields(e, tab, false), accounts: e.creds.length, quick: quickRef(e, tab) });
   function full(row, e, tab) {
     const secrets = {};
     for (const fd of tab.fields) {
@@ -112,7 +112,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     for (let i = 0; p && i < 50; i++) { const pr = rowOf(p); if (!pr) break; path.unshift({ id: pr.id, title: openEntry(pr).title }); p = pr.parent_id; }
     return {
       ...light(row, e, tab), deleted: row.deleted || null, fields: plainFields(e, tab, true), secrets, path,
-      creds: e.creds.map(c => ({ id: c.id, label: c.label, user: c.user, url: c.url, set: !!c.secret, changed: e.changed['cred:' + c.id] || null, bits: c.secret ? T.strengthBits(c.secret) : undefined, history: (e.hist['cred:' + c.id] || []).map(h => ({ t: h.t })) })),
+      creds: e.creds.map(c => ({ id: c.id, label: c.label, user: c.user, url: c.url, note: c.note || '', hasTotp: !!c.totp, set: !!c.secret, changed: e.changed['cred:' + c.id] || null, bits: c.secret ? T.strengthBits(c.secret) : undefined, history: (e.hist['cred:' + c.id] || []).map(h => ({ t: h.t })) })),
       specs: e.specs, nics: e.nics, notes: e.notes,
     };
   }
@@ -182,11 +182,12 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     for (const c of (Array.isArray(input.creds) ? input.creds : []).slice(0, 50)) {
       const pc = c.id && prevCreds.get(c.id);
       const cid = pc ? pc.id : crypto.randomBytes(6).toString('hex');
-      const out = { id: cid, label: clip(c.label, 80).trim(), user: clip(c.user, 200).trim(), url: clip(c.url, 300).trim(), secret: pc ? pc.secret : '' };
+      const out = { id: cid, label: clip(c.label, 80).trim(), user: clip(c.user, 200).trim(), url: clip(c.url, 300).trim(), note: clip(c.note, 300).trim(), secret: pc ? pc.secret : '', totp: pc ? pc.totp || '' : '' };
+      if (typeof c.totp === 'string') { const nt = cleanSecret({ type: 'totp' }, c.totp); if (nt !== out.totp) { out.totp = nt; e.changed['cred:' + cid + ':totp'] = now; } }
       if (typeof c.secret === 'string') { const nv = clip(c.secret, 2000); if (rotate(e, 'cred:' + cid, out.secret, nv, now, old, true)) out.secret = nv; }
       e.creds.push(out);
     }
-    for (const k of Object.keys(e.changed)) if (k.startsWith('cred:') && !e.creds.some(c => 'cred:' + c.id === k)) { delete e.changed[k]; delete e.hist[k]; }
+    for (const k of Object.keys(e.changed)) if (k.startsWith('cred:') && !e.creds.some(c => k === 'cred:' + c.id || k === 'cred:' + c.id + ':totp')) { delete e.changed[k]; delete e.hist[k]; }
     if (JSON.stringify(e).length > 400000) throw new Error('That entry is too large');
     const write = () => {
       let eid = id;
@@ -263,7 +264,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     const tabs = tabMap();
     return everything().filter(({ row, e }) => {
       const tab = tabOfRow(row, tabs);
-      const hay = [e.title, e.subtitle, e.tags.join(' '), e.notes, e.specs.map(s => `${s.k} ${s.v}`).join(' '), e.creds.map(c => `${c.label} ${c.user} ${c.url}`).join(' '), e.nics.map(n => `${n.label} ${n.ip} ${n.mac}`).join(' '), tab.name, ...tab.fields.filter(fd => !T.SECRET_TYPES.has(fd.type)).map(fd => e.fields[fd.key] || '')].join('\n').toLowerCase();
+      const hay = [e.title, e.subtitle, e.tags.join(' '), e.notes, e.specs.map(s => `${s.k} ${s.v}`).join(' '), e.creds.map(c => `${c.label} ${c.user} ${c.url} ${c.note || ''}`).join(' '), e.nics.map(n => `${n.label} ${n.ip} ${n.mac}`).join(' '), tab.name, ...tab.fields.filter(fd => !T.SECRET_TYPES.has(fd.type)).map(fd => e.fields[fd.key] || '')].join('\n').toLowerCase();
       return words.every(w => hay.includes(w));
     }).map(({ row }) => row.id);
   });
@@ -292,7 +293,9 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   });
   api('entries:totp', (a, id, key) => {
     const row = rowOf(id); if (!row) throw new Error('No such entry');
-    const seed = (openEntry(row).fields || {})[key]; if (!seed) throw new Error('No authenticator seed set');
+    const e = openEntry(row), ck = String(key);
+    const seed = ck.startsWith('cred:') ? ((e.creds || []).find(x => 'cred:' + x.id === ck) || {}).totp : (e.fields || {})[ck];
+    if (!seed) throw new Error('No authenticator seed set');
     const now = Date.now();
     const recent = db.get("SELECT id FROM vault_audit WHERE action='totp' AND entry_id=? AND ts>? LIMIT 1", row.id, now - 120000);
     if (!recent) audit(a, 'totp', row.id, String(key));

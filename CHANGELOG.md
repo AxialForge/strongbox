@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-01
+
+### Added
+
+- **Accounts**: any entry, in any type (hardware, services, websites…), can hold as many users as it needs. Each account has a name (admin, read-only, SSH, deploy…), user name, password with history and strength, an optional 2FA seed with a live code, an address and a note. The old "More logins" section is now Accounts, shown as a card per account on the entry page; the vault list shows "N accounts"; templates carry account names; account notes are searchable; account passwords count in the weak, reused and old reports.
+
 ## [0.3.1] - 2026-10-01
 
 ### Fixed

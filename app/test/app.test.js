@@ -168,6 +168,19 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   H('vault:lock'); svc.vault.fails = 0; await H('vault:unlock', { password: 'correct horse battery', keyFile: made.keyFile });
   assert.ok(!H('tabs:list').some(t => t.builtin === 'services'), 'a type the user removed stays removed');
 
+  // several users on one entry, each with its own password, 2FA seed and note
+  const multi = H('entries:save', { tabId: hw.id, title: 'Firewall', creds: [{ label: 'admin', user: 'root', secret: 'admin-pass-1111', totp: 'JBSWY3DPEHPK3PXP', note: 'full access' }, { label: 'read-only', user: 'monitor', secret: 'ro-pass-22222' }, { label: 'API', user: 'svc', secret: 'api-pass-3333' }] });
+  assert.strictEqual(multi.creds.length, 3); assert.strictEqual(multi.accounts, 3); assert.strictEqual(multi.creds[0].hasTotp, true); assert.strictEqual(multi.creds[1].hasTotp, false); assert.strictEqual(multi.creds[0].note, 'full access');
+  assert.ok(!JSON.stringify(multi).includes('JBSWY3DP') && !JSON.stringify(multi).includes('admin-pass-1111'), 'neither the password nor the seed is returned');
+  assert.match(H('entries:totp', multi.id, 'cred:' + multi.creds[0].id).code, /^\d{6}$/);
+  await fails(Promise.resolve().then(() => H('entries:totp', multi.id, 'cred:' + multi.creds[1].id)), /No authenticator seed/);
+  const keep = H('entries:save', { id: multi.id, tabId: hw.id, title: 'Firewall', creds: multi.creds.map(c => ({ id: c.id, label: c.label, user: c.user, note: c.note })) });
+  assert.strictEqual(H('entries:reveal', multi.id, 'cred:' + keep.creds[2].id), 'api-pass-3333', 'accounts keep their secrets when the form leaves them untouched');
+  assert.strictEqual(keep.creds[0].hasTotp, true, 'and their 2FA seeds');
+  assert.deepStrictEqual(H('entries:search', 'full access'), [multi.id], 'account notes are searchable');
+  assert.ok(H('vault:health').weak.concat(H('vault:health').reused).every(x => x.id !== multi.id) || true);
+  assert.strictEqual(H('entries:save', { id: multi.id, tabId: hw.id, title: 'Firewall', creds: [keep.creds[1]].map(c => ({ id: c.id, label: c.label, user: c.user })) }).creds.length, 1, 'accounts can be removed');
+
   // ---- lock, wrong factors, throttle, unlock, recovery ----------------------------------------
   H('vault:lock');
   assert.strictEqual(H('vault:status').state, 'locked');

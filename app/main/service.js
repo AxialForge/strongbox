@@ -163,7 +163,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     if (id && !old) throw new Error('No such entry');
     const tabId = Number(input.tabId || (old && old.tab_id));
     const tab = tabs.get(tabId);
-    if (!tab) throw new Error('Choose a tab for this entry');
+    if (!tab) throw new Error('Choose a type for this entry');
     const parentId = checkParent(id, 'parentId' in input ? input.parentId : (old && old.parent_id));
     const prev = old ? { ...blank(), ...openEntry(old) } : blank();
     const e = { ...prev, title, subtitle: clip(input.subtitle, 200).trim(), fields: { ...prev.fields }, notes: clip(input.notes, 100000), favorite: !!input.favorite, changed: { ...prev.changed }, hist: structuredClone(prev.hist), creds: [] };
@@ -209,7 +209,28 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     db.run('UPDATE tabs SET blob=? WHERE id=?', vault.seal(clean, `tab/${id}`), id);
     return id;
   }
-  const seedTabs = () => db.transaction(() => { T.DEFAULT_TABS.forEach((t, i) => writeTab(t, null, i)); });
+  const seedTabs = () => { db.transaction(() => { T.DEFAULT_TABS.forEach((t, i) => writeTab(t, null, i)); }); db.kvSet('seededTabs', T.DEFAULT_TABS.map(t => t.builtin)); };
+  /** Default types added in later versions appear once in an existing vault, right after the type that precedes them in the defaults. */
+  function ensureDefaultTabs() {
+    const done = new Set(db.kvGet('seededTabs', []));
+    if (T.DEFAULT_TABS.every(d => done.has(d.builtin))) return false;
+    let added = false;
+    db.transaction(() => {
+      for (const [i, d] of T.DEFAULT_TABS.entries()) {
+        if (done.has(d.builtin)) continue;
+        done.add(d.builtin);
+        const list = tabList();
+        if (list.some(t => t.builtin === d.builtin)) continue;
+        const id = writeTab(d, null, 1e6), prevKey = i ? T.DEFAULT_TABS[i - 1].builtin : null;
+        const order = list.map(t => t.id), at = prevKey ? list.findIndex(t => t.builtin === prevKey) : -1;
+        order.splice(at + 1, 0, id);
+        order.forEach((tid, k) => db.run('UPDATE tabs SET sort=? WHERE id=?', k, tid));
+        added = true;
+      }
+      db.kvSet('seededTabs', [...done]);
+    });
+    return added;
+  }
 
   api('tabs:list', () => {
     const counts = new Map(db.all('SELECT tab_id, COUNT(*) n FROM entries WHERE deleted IS NULL GROUP BY tab_id').map(r => [r.tab_id, r.n]));
@@ -217,7 +238,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   });
   api('tabs:save', (a, tab = {}) => {
     const id = Number(tab.id) || null;
-    if (id && !db.get('SELECT id FROM tabs WHERE id=?', id)) throw new Error('No such tab');
+    if (id && !db.get('SELECT id FROM tabs WHERE id=?', id)) throw new Error('No such type');
     const prev = id ? tabMap().get(id) : null;
     const newId = writeTab({ ...tab, builtin: prev && prev.builtin }, id);
     audit(a, id ? 'tab_saved' : 'tab_created', null, `tab ${newId}`); changed();
@@ -227,8 +248,8 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   api('tabs:delete', (a, id, moveTo = null) => {
     id = Number(id);
     const n = db.get('SELECT COUNT(*) n FROM entries WHERE tab_id=?', id).n;
-    if (n && !(moveTo && Number(moveTo) !== id && db.get('SELECT id FROM tabs WHERE id=?', Number(moveTo)))) throw new Error(`This tab holds ${n} entr${n === 1 ? 'y' : 'ies'} (counting the trash); choose another tab to move them to`);
-    if (db.get('SELECT COUNT(*) n FROM tabs').n <= 1) throw new Error('Keep at least one tab');
+    if (n && !(moveTo && Number(moveTo) !== id && db.get('SELECT id FROM tabs WHERE id=?', Number(moveTo)))) throw new Error(`This type holds ${n} entr${n === 1 ? 'y' : 'ies'} (counting the trash); choose another type to move them to`);
+    if (db.get('SELECT COUNT(*) n FROM tabs').n <= 1) throw new Error('Keep at least one type');
     db.transaction(() => { if (n) db.run('UPDATE entries SET tab_id=? WHERE tab_id=?', Number(moveTo), id); db.run('DELETE FROM tabs WHERE id=?', id); });
     audit(a, 'tab_deleted', null, `tab ${id}, ${n} entries moved`); changed();
     return true;
@@ -251,7 +272,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   api('entries:move', (a, id, to = {}) => {
     const row = rowOf(id); if (!row) throw new Error('No such entry');
     const tabId = Number(to.tabId || row.tab_id);
-    if (!db.get('SELECT id FROM tabs WHERE id=?', tabId)) throw new Error('No such tab');
+    if (!db.get('SELECT id FROM tabs WHERE id=?', tabId)) throw new Error('No such type');
     const parentId = checkParent(row.id, 'parentId' in to ? to.parentId : row.parent_id);
     db.run('UPDATE entries SET tab_id=?, parent_id=?, updated=? WHERE id=?', tabId, parentId, Date.now(), row.id);
     audit(a, 'entry_moved', row.id); changed({ id: row.id });
@@ -309,7 +330,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     return n;
   });
   api('entries:importCsv', (a, tabId, text) => {
-    const tab = tabMap().get(Number(tabId)); if (!tab) throw new Error('Choose a tab to import into');
+    const tab = tabMap().get(Number(tabId)); if (!tab) throw new Error('Choose a type to import into');
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error('The file has no rows');
     if (rows.length > 5001) throw new Error('At most 5000 rows per import');
@@ -485,6 +506,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       } else if (e.code === 'throttled') audit(a, 'unlock_blocked', null, null);
       throw e;
     }
+    if (ensureDefaultTabs()) log('added the new default types');
     audit(a, 'unlock', null, creds.recoveryKey ? 'recovery key' : null); changed();
     return vault.status();
   }, { data: false });
@@ -493,7 +515,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   api('vault:newRecovery', async (a) => { const r = await vault.newRecovery(); audit(a, 'recovery_key_renewed'); return r; }, { data: false });
   api('vault:resetEmpty', (a) => {
     if (db.get('SELECT COUNT(*) n FROM entries').n) throw new Error('The vault holds entries; a reset would destroy them. Restore from a backup instead.');
-    db.transaction(() => { db.run('DELETE FROM tabs'); db.run('DELETE FROM prefs'); db.run('DELETE FROM vault_meta'); });
+    db.transaction(() => { db.run('DELETE FROM tabs'); db.run('DELETE FROM prefs'); db.run('DELETE FROM vault_meta'); db.run("DELETE FROM kv WHERE k='seededTabs'"); });
     vault.lock('reset'); audit(a, 'vault_reset'); changed();
     return true;
   }, { data: false });

@@ -26,6 +26,11 @@ const DEFAULT_TABS = [
     f('model', 'Make / model'), f('host', 'Hostname'), f('ip', 'IP address', 'ip'), f('mac', 'MAC address', 'mac'), f('serial', 'Serial number'), f('location', 'Location'), f('firmware', 'Firmware / OS'),
     f('user', 'Admin username'), f('pass', 'Admin password', 'password', { gen: 'device' }), f('bought', 'Purchased', 'date'), f('warranty', 'Warranty until', 'date', { expiry: true }),
   ] },
+  { builtin: 'services', name: 'Services', icon: '⚙', color: 'teal', fields: [
+    f('kind', 'Kind', 'select', { options: ['Web app', 'Database', 'Container', 'Daemon / system service', 'Media server', 'Home automation', 'API', 'Other'] }),
+    f('url', 'Address', 'url'), f('port', 'Port'), f('version', 'Version'), f('user', 'Username'), f('pass', 'Password', 'password', { gen: 'strong' }),
+    f('token', 'API key / token', 'secret'), f('totp', 'Authenticator seed', 'totp'), f('unit', 'Service / unit name'), f('path', 'Install path / data folder'), f('repo', 'Source / docs', 'url'),
+  ] },
   { builtin: 'websites', name: 'Websites', icon: '◍', color: 'violet', fields: [
     f('url', 'Address', 'url'), f('user', 'Username'), f('email', 'E-mail used'), f('pass', 'Password', 'password', { gen: 'strong' }), f('totp', 'Authenticator seed', 'totp'), f('recovery', 'Recovery codes', 'secret', { multiline: true }),
   ] },
@@ -48,6 +53,7 @@ const BUILTIN_TEMPLATES = [
   { id: 'b:nas', name: 'NAS', icon: '▦', tabKey: 'hardware', tags: ['storage'], fields: { kind: 'NAS' }, specs: ['Bays', 'Capacity', 'RAID', 'Firmware'], creds: ['Web UI', 'SSH', 'Share user'], nics: ['LAN 1', 'LAN 2'] },
   { id: 'b:router', name: 'Router / firewall', icon: '▦', tabKey: 'hardware', tags: ['network'], fields: { kind: 'Router' }, specs: ['Firmware', 'Ports', 'Uplink'], creds: ['Web UI', 'SSH / console'], nics: ['LAN', 'WAN'] },
   { id: 'b:switch', name: 'Switch / access point', icon: '▦', tabKey: 'hardware', tags: ['network'], fields: { kind: 'Switch' }, specs: ['Ports', 'PoE budget', 'Firmware'], creds: ['Web UI', 'SSH / console'], nics: ['Management'] },
+  { id: 'b:service', name: 'Service / app', icon: '⚙', tabKey: 'services', tags: ['service'], fields: { kind: 'Web app' }, specs: ['Version', 'Port', 'Data folder'], creds: ['Admin', 'API'], nics: [] },
   { id: 'b:website', name: 'Website login', icon: '◍', tabKey: 'websites', tags: [], fields: {}, specs: [], creds: [], nics: [] },
   { id: 'b:key', name: 'Hardware security key', icon: '⚿', tabKey: 'keys', tags: ['2fa'], fields: { kind: 'Hardware security key' }, specs: ['Protocols'], creds: [], nics: [] },
   { id: 'b:licence', name: 'Software licence', icon: '⚿', tabKey: 'keys', tags: ['licence'], fields: { kind: 'Software licence' }, specs: ['Seats', 'Version'], creds: [], nics: [] },
@@ -60,7 +66,7 @@ const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
 /** Validates and normalises a tab as the editor sends it. Throws a readable error. */
 function cleanTab(t = {}) {
   const name = String(t.name || '').trim().slice(0, 40);
-  if (!name) throw new Error('A tab needs a name');
+  if (!name) throw new Error('A type needs a name');
   const seen = new Set(), fields = [];
   for (const raw of Array.isArray(t.fields) ? t.fields : []) {
     const label = String(raw.label || '').trim().slice(0, 60);

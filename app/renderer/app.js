@@ -43,13 +43,13 @@ Dash.mount({
   header: ({ d }) => `<div class="livebar"><span class="dot ok"></span>${d.total} entries · ${d.health.passwords} passwords${d.lockInMs != null ? ` · ${UI.term('auto-lock', 'auto-locks')} after ${Math.round(d.lockInMs / 60000)} min of no activity` : ''}</div>`,
   load: async () => ({ d: await api.data.dashboard() }),
   catalog: [
-    { type: 'total', group: 'Vault', label: 'Entries', help: 'How many entries the vault holds', sizes: ['s', 'm'], def: 's', render: ({ d }) => linkTile('#vault', tile('', 'Entries', d.total, `${d.perTab.length} tabs`)) },
+    { type: 'total', group: 'Vault', label: 'Entries', help: 'How many entries the vault holds', sizes: ['s', 'm'], def: 's', render: ({ d }) => linkTile('#vault', tile('', 'Entries', d.total, `${d.perTab.length} types`)) },
     { type: 'weak', group: 'Health', label: 'Weak passwords', help: 'Passwords with low estimated strength', sizes: ['s', 'm'], def: 's', rule: { warn: 1, bad: 5 }, render: ({ d, rule }) => linkTile('#health', tile(Cards.colorFor(d.health.weak, rule), 'Weak passwords', d.health.weak, 'low entropy')) },
     { type: 'reused', group: 'Health', label: 'Reused passwords', help: 'The same password used by more than one entry', sizes: ['s', 'm'], def: 's', rule: { warn: 1, bad: 4 }, render: ({ d, rule }) => linkTile('#health', tile(Cards.colorFor(d.health.reused, rule), 'Reused passwords', d.health.reused, 'shared between entries')) },
     { type: 'stale', group: 'Health', label: 'Old passwords', help: 'Passwords not changed for longer than the limit in Settings', sizes: ['s', 'm'], def: 's', rule: { warn: 3, bad: 15 }, render: ({ d, rule }) => linkTile('#health', tile(Cards.colorFor(d.health.stale, rule), 'Old passwords', d.health.stale, `unchanged for ${(SB.settings || {}).staleDays || '∞'} days`)) },
     { type: 'expiring', group: 'Health', label: 'Expiring soon', help: 'Warranties, licences and keys that expire soon', sizes: ['s', 'm'], def: 's', rule: { warn: 1, bad: 3 }, render: ({ d, rule }) => linkTile('#health', tile(Cards.colorFor(d.health.expiring, rule), 'Expiring soon', d.health.expiring, 'dates to watch')) },
     { type: 'trash', group: 'Vault', label: 'Trash', help: 'Deleted entries waiting to be purged', sizes: ['s'], def: 's', render: ({ d }) => linkTile('#trash', tile('', 'In the trash', d.trash, 'restorable')) },
-    { type: 'bytab', group: 'Charts', label: 'Entries by tab', help: 'Share of entries per tab', sizes: ['m', 'l', 'xl'], def: 'l', render: ({ d }) => Cards.bars(d.perTab.map(t => ({ k: t.name, n: t.n })), 'Entries by tab', { drill: false }) },
+    { type: 'bytab', group: 'Charts', label: 'Entries by type', help: 'Share of entries per type', sizes: ['m', 'l', 'xl'], def: 'l', render: ({ d }) => Cards.bars(d.perTab.map(t => ({ k: t.name, n: t.n })), 'Entries by type', { drill: false }) },
     { type: 'recent', group: 'Lists', label: 'Recently changed', help: 'The entries edited last', sizes: ['l', 'xl'], def: 'l', list: true, render: ({ d, o }) => rowsList('Recently changed', '#vault', d.recent.slice(0, o.limit || 8), r => `<tr><td class="muted nowrap">${fmtAgo(r.updated)}</td><td class="wrap">${link(r.id, r.title)}</td></tr>`) },
     { type: 'favorites', group: 'Lists', label: 'Favorites', help: 'Entries you starred', sizes: ['l', 'xl'], def: 'l', list: true, render: ({ d }) => rowsList('Favorites', '', d.favorites, r => `<tr><td class="wrap">★ ${link(r.id, r.title)}</td></tr>`) },
     { type: 'expirelist', group: 'Lists', label: 'Dates to watch', help: 'Expiring warranties, licences and keys, soonest first', sizes: ['l', 'xl'], def: 'l', render: ({ d }) => rowsList('Dates to watch', '#health', d.expiring, r => `<tr><td class="wrap">${link(r.id, r.title)} <span class="muted">${esc(r.label)}</span></td><td class="nowrap ${r.days < 0 ? 'bad' : r.days < 30 ? 'warn' : 'muted'}">${r.days < 0 ? `expired ${-r.days} d ago` : `in ${r.days} d`}</td></tr>`) },
@@ -88,7 +88,7 @@ views.vault = guard(async (arg) => {
   const tree = (items, depth = 0) => items.sort(byTitle).map(e => rowHtml(e, depth, false) + (openSet.has(e.id) && kids.get(e.id) ? tree([...kids.get(e.id)], depth + 1) : '')).join('');
   const newTab = tabId === 'all' ? (tabs[0] && tabs[0].id) : tabId;
   v.innerHTML = `<h1>Vault</h1>
-    <div class="tabbar"><a class="tabbtn ${tabId === 'all' ? 'on' : ''}" href="#vault/all">All <span class="count">${list.length}</span></a>${tabs.map(t => `<a class="tabbtn ${t.id === tabId ? 'on' : ''}" href="#vault/${t.id}"><i class="tdot tc-${esc(t.color || 'blue')}"></i>${esc(t.icon)} ${esc(t.name)} <span class="count">${t.count}</span></a>`).join('')}${isAdmin() ? '<a class="tabbtn plus" href="#tabs" title="Manage tabs">⚙</a>' : ''}</div>
+    <div class="tabbar"><a class="tabbtn ${tabId === 'all' ? 'on' : ''}" href="#vault/all">All <span class="count">${list.length}</span></a>${tabs.map(t => `<a class="tabbtn ${t.id === tabId ? 'on' : ''}" href="#vault/${t.id}"><i class="tdot tc-${esc(t.color || 'blue')}"></i>${esc(t.icon)} ${esc(t.name)} <span class="count">${t.count}</span></a>`).join('')}${isAdmin() ? '<a class="tabbtn plus" href="#tabs" title="Manage types">⚙</a>' : ''}</div>
     <div class="toolbar"><input type="search" id="q" placeholder="Search titles, fields, notes, tags (never secrets)" autocomplete="off"><span class="muted small" id="qcount"></span><span class="grow"></span>${isAdmin() ? `<button class="small" id="expand">Expand all</button><button class="small" id="collapse">Collapse</button><select id="newFrom" class="small" title="Start from a template"><option value="">＋ From template…</option>${templates.map(t => `<option value="${esc(t.id)}">${esc(t.name)}${t.builtin ? '' : ' (yours)'}</option>`).join('')}</select><a href="#new/${newTab}"><button class="primary">New entry</button></a>` : ''}</div>
     <div class="tagrow" id="tagrow"></div>
     <div class="card elist" id="elist"></div>`;
@@ -97,8 +97,8 @@ views.vault = guard(async (arg) => {
   let curIds = null;
   const draw = (ids = curIds) => {
     curIds = ids || null; drawTags();
-    if (ids || activeTags.size) { const rows = list.filter(e => (!ids || ids.has(e.id)) && [...activeTags].every(t => e.tags.includes(t))).sort(byTitle); box.innerHTML = rows.map(e => rowHtml(e, 0, true)).join('') || '<div class="empty">No entry matches.</div>'; $('#qcount').textContent = `${rows.length} match${rows.length === 1 ? '' : 'es'} in all tabs`; }
-    else { box.innerHTML = tree(roots) || `<div class="empty">${list.length ? 'Nothing in this tab yet.' : 'The vault is empty.'}${isAdmin() ? ` <a href="#new/${newTab}">Add the first entry</a>.` : ''}</div>`; $('#qcount').textContent = ''; }
+    if (ids || activeTags.size) { const rows = list.filter(e => (!ids || ids.has(e.id)) && [...activeTags].every(t => e.tags.includes(t))).sort(byTitle); box.innerHTML = rows.map(e => rowHtml(e, 0, true)).join('') || '<div class="empty">No entry matches.</div>'; $('#qcount').textContent = `${rows.length} match${rows.length === 1 ? '' : 'es'} in all types`; }
+    else { box.innerHTML = tree(roots) || `<div class="empty">${list.length ? 'Nothing in this type yet.' : 'The vault is empty.'}${isAdmin() ? ` <a href="#new/${newTab}">Add the first entry</a>.` : ''}</div>`; $('#qcount').textContent = ''; }
   };
   draw();
   let timer = null;
@@ -143,14 +143,14 @@ views.entry = guard(async (id) => {
     <div class="tiny muted" style="margin:-4px 0 10px">${e.tags.map(SB.tagBadge).join('')} created ${fmtDate(e.created)} · edited ${fmtAgo(e.updated)}</div>
     <div class="grid2">
       <div>
-        <div class="card"><h3>Details</h3><table class="kv dtl">${fieldRows || '<tr><td class="muted">This tab has no fields.</td></tr>'}</table></div>
+        <div class="card"><h3>Details</h3><table class="kv dtl">${fieldRows || '<tr><td class="muted">This type has no fields.</td></tr>'}</table></div>
         ${e.creds.length ? `<div class="card"><h3>More logins</h3><table class="kv dtl">${e.creds.map(c => `<tr><td>${esc(c.label || 'Login')}${c.url ? `<div class="tiny">${safeUrl(c.url) ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.url)}</a>` : esc(c.url)}</div>` : ''}</td><td>${c.user ? `<div>${esc(c.user)} <button class="small ghost" data-user="${esc(c.user)}" title="Copy user name">⧉</button></div>` : ''}${c.set ? `<div class="srow"><span class="val mono" data-mask="${SB.MASK}">${SB.MASK}</span> <button class="small" data-reveal="cred:${c.id}">Show</button> <button class="small" data-copy="cred:${c.id}">Copy</button>${c.history.length ? ` <button class="small" data-hist="cred:${c.id}" data-label="${esc(c.label || 'Login')}">History (${c.history.length})</button>` : ''} ${pwAge(c.changed)}</div>` : '<span class="muted">no password</span>'}</td></tr>`).join('')}</table></div>` : ''}
       </div>
       <div class="stack">
         ${e.specs.length ? `<div class="card"><h3>Specs</h3><table class="kv">${e.specs.map(s => `<tr><td>${esc(s.k)}</td><td>${esc(s.v)}</td></tr>`).join('')}</table></div>` : ''}
         ${e.nics.length ? `<div class="card"><h3>Network interfaces</h3><table class="kv">${e.nics.map(n => `<tr><td>${esc(n.label || 'Interface')}</td><td>${n.ip ? `<span class="mono">${esc(n.ip)}</span> <button class="small ghost" data-text="${esc(n.ip)}" title="Copy">⧉</button>` : ''}${n.ip && n.mac ? '<br>' : ''}${n.mac ? `<span class="mono muted">${esc(n.mac)}</span> <button class="small ghost" data-text="${esc(n.mac)}" title="Copy">⧉</button>` : ''}</td></tr>`).join('')}</table></div>` : ''}
         ${e.notes ? `<div class="card"><h3>Notes</h3><div class="pre">${esc(e.notes)}</div></div>` : ''}
-        <div class="card"><h3>Nested under this ${isAdmin() ? `<a class="right" href="#new/${e.tabId}/${e.id}">＋ add</a>` : ''}</h3><table>${kids.map(k => `<tr><td class="wrap">${(tabs.find(t => t.id === k.tabId) || {}).icon || ''} ${link(k.id, k.title)}${k.subtitle ? ` <span class="muted">${esc(k.subtitle)}</span>` : ''}</td><td class="nowrap">${k.tabId !== e.tabId ? tabBadge(tabs.find(t => t.id === k.tabId) || { icon: '', name: '?' }) : ''}</td></tr>`).join('') || '<tr><td class="muted">Nothing nested here. A server can hold its VMs and services, a NAS its shares.</td></tr>'}</table></div>
+        <div class="card"><h3>Nested under this ${isAdmin() ? `<a class="right" href="#new/${e.tabId}/${e.id}">＋ ${tab.builtin === 'hardware' ? 'add a service' : 'add'}</a>` : ''}</h3><table>${kids.map(k => `<tr><td class="wrap">${(tabs.find(t => t.id === k.tabId) || {}).icon || ''} ${link(k.id, k.title)}${k.subtitle ? ` <span class="muted">${esc(k.subtitle)}</span>` : ''}</td><td class="nowrap">${k.tabId !== e.tabId ? tabBadge(tabs.find(t => t.id === k.tabId) || { icon: '', name: '?' }) : ''}</td></tr>`).join('') || '<tr><td class="muted">Nothing nested here. A server can hold its VMs and services, a NAS its shares.</td></tr>'}</table></div>
       </div>
     </div>`;
   SB.wireSecrets(v, e.id);
@@ -158,7 +158,7 @@ views.entry = guard(async (id) => {
   $$('[data-user]', v).forEach(b => { b.onclick = () => SB.copy(b.dataset.user, 'Copied', false); });
   $$('[data-text]', v).forEach(b => { b.onclick = () => SB.copy(b.dataset.text, 'Copied', false); });
   if ($('#eTpl')) $('#eTpl').onclick = () => {
-    const card = openModal(`<h2>Save as template</h2><div class="path">Keeps the tab, tags, spec names, login labels and interface names. Never a password or a secret.</div>
+    const card = openModal(`<h2>Save as template</h2><div class="path">Keeps the type, tags, spec names, login labels and interface names. Never a password or a secret.</div>
       <div class="field"><label>Name</label><input type="text" id="tpName" value="${esc(e.title)}" autocomplete="off"></div>
       <div class="field"><label>Values</label><label class="inline small"><input type="checkbox" id="tpKeep"> also keep the field values and spec values (model, IP, CPU…)</label></div>
       <div class="actions"><span class="grow"></span><button id="tpCancel">Cancel</button><button class="primary" id="tpSave">Save template</button></div>`);
@@ -185,7 +185,7 @@ views.entry = guard(async (id) => {
   if ($('#eDel')) $('#eDel').onclick = async () => { if (!confirmWord(`Move "${e.title}"${kids.length ? ` and its ${kids.length} nested entr${kids.length === 1 ? 'y' : 'ies'}` : ''} to the trash? You can restore it from the Trash page.`)) return; try { await api.entries.delete(e.id); toast('Moved to the trash'); location.hash = '#vault/' + e.tabId; } catch (ex) { toast(ex.message, true); } };
   if ($('#eMove')) $('#eMove').onclick = () => {
     const banned = new Set([e.id]); (function walk(id) { for (const k of all.filter(x => x.parentId === id)) { banned.add(k.id); walk(k.id); } })(e.id);
-    const card = openModal(`<h2>Move "${esc(e.title)}"</h2><div class="field"><label>Tab</label><select id="mvTab">${tabs.map(t => `<option value="${t.id}" ${t.id === e.tabId ? 'selected' : ''}>${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select></div>
+    const card = openModal(`<h2>Move "${esc(e.title)}"</h2><div class="field"><label>Type</label><select id="mvTab">${tabs.map(t => `<option value="${t.id}" ${t.id === e.tabId ? 'selected' : ''}>${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Nested under</label><select id="mvParent"><option value="">(top level)</option>${all.filter(x => !banned.has(x.id)).sort((a, b) => a.title.localeCompare(b.title)).map(x => `<option value="${x.id}" ${x.id === e.parentId ? 'selected' : ''}>${esc(x.title)}</option>`).join('')}</select></div>
       <div class="actions"><span class="grow"></span><button id="mvCancel">Cancel</button><button class="primary" id="mvGo">Move</button></div>`);
     $('#mvCancel', card).onclick = closeModal;
@@ -213,6 +213,10 @@ async function editor(mode, arg) {
   }
   const allTags = await api.tags.list(); SB.tagColors = Object.fromEntries(allTags.map(t => [t.name, t.color]));
   const parent = draft.parentId ? await api.entries.get(draft.parentId).catch(() => null) : null;
+  if (mode === 'new' && parent && draft.tabId === parent.tabId) { // a new thing under hardware is usually a service
+    const ptab = tabs.find(t => t.id === parent.tabId), svcTab = tabs.find(t => t.builtin === 'services');
+    if (ptab && ptab.builtin === 'hardware' && svcTab) draft.tabId = svcTab.id;
+  }
   const collect = () => {
     draft.tabId = Number($('#eTab').value); draft.title = $('#eTitle').value; draft.subtitle = $('#eSub').value; draft.favorite = $('#eFav').checked; draft.tags = $('#eTags').value; draft.notes = $('#eNotes').value;
     const tab = tabs.find(t => t.id === draft.tabId);
@@ -242,14 +246,14 @@ async function editor(mode, arg) {
       <h1>${mode === 'edit' ? 'Edit entry' : 'New entry'}</h1>
       <form class="form" id="eForm">
         <div class="card">
-          <div class="field"><label>Tab</label><select id="eTab">${tabs.map(t => `<option value="${t.id}" ${t.id === draft.tabId ? 'selected' : ''}>${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select></div>
+          <div class="field"><label>Type</label><select id="eTab">${tabs.map(t => `<option value="${t.id}" ${t.id === draft.tabId ? 'selected' : ''}>${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select></div>
           <div class="field"><label>Title</label><input type="text" id="eTitle" value="${esc(draft.title)}" required autocomplete="off"></div>
           <div class="field"><label>Subtitle</label><input type="text" id="eSub" value="${esc(draft.subtitle)}" placeholder="optional: a short description" autocomplete="off"></div>
           <div class="field"><label>Tags</label><div><input type="text" id="eTags" value="${esc(draft.tags)}" placeholder="comma separated, or click a tag below" autocomplete="off"><div class="tagpick">${allTags.map(t => `<a data-addtag="${esc(t.name)}">${SB.tagBadge(t.name)}</a>`).join('')}</div></div></div>
           <div class="field"><label>Favorite</label><input type="checkbox" id="eFav" ${draft.favorite ? 'checked' : ''}></div>
         </div>
         <div class="section-head"><h2>${esc(tab.name)} details</h2></div>
-        <div class="card">${tab.fields.map(fd => `<div class="field"><label>${esc(fd.label)}</label>${input(fd)}</div>`).join('') || '<div class="muted">This tab has no fields; add some under Tabs.</div>'}</div>
+        <div class="card">${tab.fields.map(fd => `<div class="field"><label>${esc(fd.label)}</label>${input(fd)}</div>`).join('') || '<div class="muted">This type has no fields; add some under Types.</div>'}</div>
         <div class="section-head"><h2>More logins</h2><span class="muted small">other accounts on the same thing: IPMI, a web UI, SSH…</span><span class="grow"></span><button type="button" class="small" id="addCred">＋ Add login</button></div>
         <div id="creds">${draft.creds.map(c => `<div class="card credrow" data-id="${esc(c.id || '')}" data-has="${c.has ? 1 : 0}"><div class="grid2"><input class="cl" placeholder="Label (IPMI, web UI…)" value="${esc(c.label)}"><input class="cu" placeholder="User name" value="${esc(c.user)}" autocomplete="off"></div><div class="grid2" style="margin-top:8px"><input class="cr" placeholder="Address (optional)" value="${esc(c.url)}"><div class="inline"><input type="password" class="cs" data-secret="1" ${c.secret !== undefined ? 'data-dirty="1"' : ''} placeholder="${c.has && c.secret === undefined ? '•••••• unchanged' : 'Password'}" value="${esc(c.secret || '')}" autocomplete="new-password" style="flex:1"><button type="button" class="small" data-eye>Show</button><button type="button" class="small" data-gen>Generate</button><button type="button" class="small danger" data-rm>✕</button></div></div></div>`).join('')}</div>
         <div class="section-head"><h2>Network</h2><span class="muted small">extra interfaces, each with its own IP and MAC address</span><span class="grow"></span><button type="button" class="small" id="addNic">＋ Add interface</button></div>
@@ -296,8 +300,8 @@ const COLORS = ['blue', 'violet', 'pink', 'red', 'amber', 'green', 'teal', 'slat
 views.tabs = guard(async () => {
   const v = UI.view();
   const tabs = await api.tabs.list();
-  v.innerHTML = `<h1>Tabs</h1><p class="lead">A tab is a kind of thing you keep: its name, icon and the fields every entry in it has. Change a template whenever you like; entries keep their values by field.</p>
-    <div class="toolbar"><button class="primary" id="tNew">New tab</button></div>
+  v.innerHTML = `<h1>Types</h1><p class="lead">A type is a kind of thing you keep: its name, icon and the fields every entry in it has. Change a template whenever you like; entries keep their values by field.</p>
+    <div class="toolbar"><button class="primary" id="tNew">New type</button></div>
     <div class="grid2">${tabs.map((t, i) => `<div class="card"><h3><span class="eicon tc-${esc(t.color || 'blue')}">${esc(t.icon)}</span>&nbsp;${esc(t.name)} <span class="right muted">${t.count} entr${t.count === 1 ? 'y' : 'ies'}</span></h3><div class="tiny muted" style="margin-bottom:8px">${t.fields.map(f => esc(f.label)).join(' · ') || 'no fields'}</div><div class="inline"><button class="small" data-edit="${t.id}">Edit fields</button><button class="small" data-up="${t.id}" ${i === 0 ? 'disabled' : ''}>↑</button><button class="small" data-down="${t.id}" ${i === tabs.length - 1 ? 'disabled' : ''}>↓</button><span class="grow"></span><button class="small danger" data-del="${t.id}">Delete</button></div></div>`).join('')}</div>`;
   $('#tNew').onclick = () => tabEditor({ name: '', icon: '☰', fields: [{ label: 'Username', type: 'text' }, { label: 'Password', type: 'password' }] });
   $$('[data-edit]', v).forEach(b => { b.onclick = () => tabEditor(structuredClone(tabs.find(t => t.id === Number(b.dataset.edit)))); });
@@ -307,15 +311,15 @@ views.tabs = guard(async () => {
   $$('[data-del]', v).forEach(b => { b.onclick = async () => {
     const t = tabs.find(x => x.id === Number(b.dataset.del));
     let to = null;
-    if (t.count || true) { const others = tabs.filter(x => x.id !== t.id); if (!others.length) return toast('Keep at least one tab', true); const ans = prompt(`Delete the "${t.name}" tab.${t.count ? ` Its ${t.count} entries move to another tab. ` : ' '}Type the name of the tab that receives them (or leave empty if it is empty):\n${others.map(o => o.name).join(', ')}`, ''); if (ans === null) return; if (ans) { const hit = others.find(o => o.name.toLowerCase() === ans.trim().toLowerCase()); if (!hit) return toast('No tab with that name', true); to = hit.id; } }
-    try { await api.tabs.delete(t.id, to); toast('Tab deleted'); UI.route(); } catch (e) { toast(e.message, true); }
+    if (t.count || true) { const others = tabs.filter(x => x.id !== t.id); if (!others.length) return toast('Keep at least one type', true); const ans = prompt(`Delete the "${t.name}" type.${t.count ? ` Its ${t.count} entries move to another type. ` : ' '}Type the name of the type that receives them (or leave empty if it is empty):\n${others.map(o => o.name).join(', ')}`, ''); if (ans === null) return; if (ans) { const hit = others.find(o => o.name.toLowerCase() === ans.trim().toLowerCase()); if (!hit) return toast('No type with that name', true); to = hit.id; } }
+    try { await api.tabs.delete(t.id, to); toast('Type deleted'); UI.route(); } catch (e) { toast(e.message, true); }
   }; });
 });
 function tabEditor(tab) {
   const ICONS = ['▦', '◍', '✉', '⚿', '☰', '⌂', '☁', '⚙', '$', '★', '♥', '⚑', '✈', '☎', '▶', '◆'];
   tab.fields = (tab.fields || []).map(f => ({ ...f, options: Array.isArray(f.options) ? f.options.join(', ') : f.options || '' }));
   const draw = () => {
-    const card = openModal(`<h2>${tab.id ? 'Edit tab' : 'New tab'}</h2>
+    const card = openModal(`<h2>${tab.id ? 'Edit type' : 'New type'}</h2>
       <div class="field"><label>Name</label><input type="text" id="tnName" value="${esc(tab.name)}" autocomplete="off"></div>
       <div class="field"><label>Icon</label><div class="inline">${ICONS.map(i => `<span class="chip ${i === tab.icon ? '' : 'off'}" data-icon="${i}" style="text-decoration:none">${i}</span>`).join('')}</div></div>
       <div class="field"><label>Colour</label><div class="inline">${COLORS.map(c => `<span class="swatch tc-${c} ${c === (tab.color || 'blue') ? 'on' : ''}" data-color="${c}" title="${c}"></span>`).join('')}</div></div>
@@ -337,7 +341,7 @@ function tabEditor(tab) {
     $$('[data-fup]', card).forEach(b => { b.onclick = () => { sync(); const i = Number(b.dataset.fup); tab.fields.splice(i - 1, 0, tab.fields.splice(i, 1)[0]); draw(); }; });
     $$('[data-fdown]', card).forEach(b => { b.onclick = () => { sync(); const i = Number(b.dataset.fdown); tab.fields.splice(i + 1, 0, tab.fields.splice(i, 1)[0]); draw(); }; });
     $('#tnCancel', card).onclick = closeModal;
-    $('#tnSave', card).onclick = async () => { sync(); try { await api.tabs.save(tab); closeModal(); toast('Tab saved'); UI.route(); } catch (e) { $('#tnErr', card).textContent = e.message; } };
+    $('#tnSave', card).onclick = async () => { sync(); try { await api.tabs.save(tab); closeModal(); toast('Type saved'); UI.route(); } catch (e) { $('#tnErr', card).textContent = e.message; } };
   };
   draw();
 }
@@ -361,14 +365,14 @@ views.trash = guard(async () => {
   const rows = await api.entries.trash();
   v.innerHTML = `<h1>Trash</h1><p class="lead">Deleted entries stay here, still encrypted, for ${(SB.settings || {}).trashDays || 'ever'}${(SB.settings || {}).trashDays ? ' days' : ''}. Restoring brings back everything that was nested inside too.</p>
     ${isAdmin() && rows.length ? '<div class="toolbar"><button class="danger" id="trEmpty">Empty the trash</button></div>' : ''}
-    <div class="card scroll-x"><table><thead><tr><th>Entry</th><th>Tab</th><th>Deleted</th><th>Items</th><th></th></tr></thead><tbody>${rows.map(r => `<tr><td class="wrap"><b>${esc(r.title)}</b>${r.subtitle ? ` <span class="muted">${esc(r.subtitle)}</span>` : ''}</td><td>${esc(r.tabName)}</td><td class="muted">${fmtAgo(r.deleted)}</td><td>${r.items}</td><td class="nowrap">${isAdmin() ? `<button class="small" data-restore="${r.id}">Restore</button> <button class="small danger" data-purge="${r.id}">Delete forever</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">The trash is empty.</td></tr>'}</tbody></table></div>`;
+    <div class="card scroll-x"><table><thead><tr><th>Entry</th><th>Type</th><th>Deleted</th><th>Items</th><th></th></tr></thead><tbody>${rows.map(r => `<tr><td class="wrap"><b>${esc(r.title)}</b>${r.subtitle ? ` <span class="muted">${esc(r.subtitle)}</span>` : ''}</td><td>${esc(r.tabName)}</td><td class="muted">${fmtAgo(r.deleted)}</td><td>${r.items}</td><td class="nowrap">${isAdmin() ? `<button class="small" data-restore="${r.id}">Restore</button> <button class="small danger" data-purge="${r.id}">Delete forever</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">The trash is empty.</td></tr>'}</tbody></table></div>`;
   $$('[data-restore]', v).forEach(b => { b.onclick = async () => { try { await api.entries.restore(Number(b.dataset.restore)); toast('Restored'); UI.route(); } catch (e) { toast(e.message, true); } }; });
   $$('[data-purge]', v).forEach(b => { b.onclick = async () => { if (!confirm('Delete this for good? It cannot be restored.')) return; try { await api.entries.purge([Number(b.dataset.purge)]); toast('Deleted for good'); UI.route(); } catch (e) { toast(e.message, true); } }; });
   if ($('#trEmpty')) $('#trEmpty').onclick = async () => { if (!confirm(`Permanently delete all ${rows.length} item(s) in the trash?`)) return; try { await api.entries.purge(null); toast('Trash emptied'); UI.route(); } catch (e) { toast(e.message, true); } };
 });
 
 // ---------- activity (the vault's own audit trail) ----------------------------------------------------------------------
-const ACTIONS = { vault_created: 'Vault created', unlock: 'Unlocked', unlock_failed: 'Failed unlock', unlock_blocked: 'Unlock blocked (too many failures)', lock: 'Locked', autolock: 'Auto-locked (idle)', reveal: 'Secret shown or copied', totp: 'Authenticator code shown', entry_created: 'Entry created', entry_saved: 'Entry edited', entry_moved: 'Entry moved', entry_trashed: 'Moved to trash', entry_restored: 'Restored from trash', entries_purged: 'Deleted for good', csv_import: 'CSV imported', tab_created: 'Tab created', tab_saved: 'Tab edited', tab_deleted: 'Tab deleted', unlock_method_changed: 'Unlock method changed', recovery_key_renewed: 'New recovery key', backup_downloaded: 'Backup downloaded', vault_reset: 'Empty vault reset' };
+const ACTIONS = { vault_created: 'Vault created', unlock: 'Unlocked', unlock_failed: 'Failed unlock', unlock_blocked: 'Unlock blocked (too many failures)', lock: 'Locked', autolock: 'Auto-locked (idle)', reveal: 'Secret shown or copied', totp: 'Authenticator code shown', entry_created: 'Entry created', entry_saved: 'Entry edited', entry_moved: 'Entry moved', entry_trashed: 'Moved to trash', entry_restored: 'Restored from trash', entries_purged: 'Deleted for good', csv_import: 'CSV imported', tab_created: 'Type created', tab_saved: 'Type edited', tab_deleted: 'Type deleted', unlock_method_changed: 'Unlock method changed', recovery_key_renewed: 'New recovery key', backup_downloaded: 'Backup downloaded', vault_reset: 'Empty vault reset' };
 views.activity = guard(async () => {
   const v = UI.view();
   const rows = await api.vault.audit(500);
@@ -414,7 +418,7 @@ views.settings = guard(async () => {
   $('#sChange').onclick = () => { const card = openModal('<div id="wizBox"></div>'); SB.wizard($('#wizBox', card), { change: true, hasRecovery: st.hasRecovery, cancel: closeModal, run: (o) => api.vault.rewrap(o), done: () => { closeModal(); toast('Unlock method changed'); UI.route(); } }); };
   $('#sRecovery').onclick = async () => { if (!confirm('Make a new recovery key? The old one stops working.')) return; try { const key = await api.vault.newRecovery(); const card = openModal(`<h2>New recovery key</h2><p class="warnbox">Shown once. The old key no longer works.</p><div class="secret" style="word-break:break-all">${esc(key)}</div><div class="inline" style="margin-top:10px"><button id="rkCopy">Copy</button><button id="rkPrint">Print</button></div><div class="actions"><span class="grow"></span><button class="primary" id="rkDone">I have saved it</button></div>`); $('#rkCopy', card).onclick = () => SB.writeClipboard(key).then(ok => toast(ok ? 'Copied' : 'Copy blocked', !ok)); $('#rkPrint', card).onclick = () => { const w = window.open('', '_blank', 'width=520,height=380'); if (!w) return toast('Allow pop-ups to print', true); w.document.write(`<pre style="font:18px Consolas,monospace;padding:24px">Strongbox recovery key\n${new Date().toDateString()}\n\n${key}\n\nKeep this paper somewhere safe.</pre>`); w.document.close(); w.print(); }; $('#rkDone', card).onclick = () => { closeModal(); UI.route(); }; } catch (e) { toast(e.message, true); } };
   $('#sBackup').onclick = async () => { try { const b = await api.vault.backup(); SB.download(b.name, b.base64, 'application/octet-stream', true); toast('Backup downloaded'); } catch (e) { toast(e.message, true); } };
-  $('#iGo').onclick = async () => { const f = $('#iFile').files[0]; if (!f) return toast('Choose a CSV file first', true); if (f.size > 5e6) return toast('That file is too large', true); if (!confirm(`Import "${f.name}" into the chosen tab?`)) return; try { const r = await api.entries.importCsv(Number($('#iTab').value), await f.text()); toast(`${r.added} imported${r.skipped ? `, ${r.skipped} skipped` : ''}. Now delete that CSV file.`); } catch (e) { toast(e.message, true); } };
+  $('#iGo').onclick = async () => { const f = $('#iFile').files[0]; if (!f) return toast('Choose a CSV file first', true); if (f.size > 5e6) return toast('That file is too large', true); if (!confirm(`Import "${f.name}" into the chosen type?`)) return; try { const r = await api.entries.importCsv(Number($('#iTab').value), await f.text()); toast(`${r.added} imported${r.skipped ? `, ${r.skipped} skipped` : ''}. Now delete that CSV file.`); } catch (e) { toast(e.message, true); } };
   if ($('#sReset')) $('#sReset').onclick = async () => { if (!confirm('Reset the vault? There is nothing in it, so nothing is lost.')) return; try { await api.vault.resetEmpty(); toast('Vault reset'); location.hash = '#dashboard'; UI.route(); } catch (e) { toast(e.message, true); } };
 });
 
@@ -435,7 +439,7 @@ views.network = guard(async () => {
     { key: 'label', label: 'Interface', render: r => esc(r.label) },
     { key: 'ip', label: 'IP address', render: r => cell(r.ip, dupIp(r)), sortVal: r => ipSort(r.ip) },
     { key: 'mac', label: 'MAC address', render: r => cell(r.mac, dupMac(r)), sortVal: r => r.mac || null },
-    { key: 'tab', label: 'Tab', render: r => esc(r.tab) },
+    { key: 'tab', label: 'Type', render: r => esc(r.tab) },
   ];
   const t = makeTable(rows, cols, { defaultSort: { key: 'ip' }, search: r => `${r.title} ${r.label} ${r.ip} ${r.mac} ${r.tab}` });
   $('#netTable').append(searchToolbar(t, rows.length), t.node);
@@ -459,7 +463,7 @@ views.templates = guard(async () => {
     <div class="tiny muted" style="margin-bottom:6px">${esc(tab.name)} · ${t.specs.length} spec${t.specs.length === 1 ? '' : 's'} · ${t.creds.length} login${t.creds.length === 1 ? '' : 's'} · ${t.nics.length} interface${t.nics.length === 1 ? '' : 's'}</div>
     <div>${t.tags.map(SB.tagBadge).join('')}${[...t.specs.map(s => s.k)].filter(Boolean).slice(0, 5).map(x => `<span class="badge">${esc(x)}</span>`).join('')}</div>
     <div class="inline" style="margin-top:10px"><a href="#newt/${esc(t.id)}"><button class="primary small">Use</button></a><button class="small" data-edit="${esc(t.id)}">${t.builtin ? 'Customize a copy' : 'Edit'}</button>${t.builtin ? '' : `<span class="grow"></span><button class="small danger" data-del="${esc(t.id)}">Delete</button>`}</div></div>`; };
-  v.innerHTML = `<h1>Templates</h1><p class="lead">A template is a ready-made starting point for a new entry: the tab, tags, the specs to fill in, the logins it usually has (IPMI, SSH, web UI) and its network interfaces. Never a password. Make one here, or open any entry and choose <b>Save as template</b>.</p>
+  v.innerHTML = `<h1>Templates</h1><p class="lead">A template is a ready-made starting point for a new entry: the type, tags, the specs to fill in, the logins it usually has (IPMI, SSH, web UI) and its network interfaces. Never a password. Make one here, or open any entry and choose <b>Save as template</b>.</p>
     <div class="toolbar"><button class="primary" id="tpNew">New template</button></div><div class="grid2 tplgrid">${list.map(card).join('')}</div>`;
   const edit = (t) => {
     const draft = structuredClone(t); draft.id = t.builtin ? null : t.id;
@@ -467,7 +471,7 @@ views.templates = guard(async () => {
     const draw = () => {
       const m = openModal(`<h2>${draft.id ? 'Edit template' : t.builtin ? 'Customize a copy' : 'New template'}</h2>
         <div class="field"><label>Name</label><input type="text" id="tpN" value="${esc(draft.name)}" autocomplete="off"></div>
-        <div class="field"><label>Tab</label><select id="tpTab">${tabs.map(x => `<option value="${x.id}" ${x.id === draft.tabId ? 'selected' : ''}>${esc(x.icon)} ${esc(x.name)}</option>`).join('')}</select></div>
+        <div class="field"><label>Type</label><select id="tpTab">${tabs.map(x => `<option value="${x.id}" ${x.id === draft.tabId ? 'selected' : ''}>${esc(x.icon)} ${esc(x.name)}</option>`).join('')}</select></div>
         <div class="field"><label>Icon</label><div class="inline">${ICONS.map(i => `<span class="chip ${i === draft.icon ? '' : 'off'}" data-ic="${i}" style="text-decoration:none">${i}</span>`).join('')}</div></div>
         <div class="field"><label>Subtitle</label><input type="text" id="tpS" value="${esc(draft.subtitle || '')}" autocomplete="off"></div>
         <div class="field"><label>Tags</label><input type="text" id="tpT" value="${esc(draft.tags.join(', '))}" placeholder="comma separated" autocomplete="off"></div>
@@ -517,7 +521,7 @@ views.tags = guard(async () => {
 views.system = pages.system;
 views.log = pages.log;
 views.security = pages.security;
-views.about = pages.about({ blurb: 'A password and credential vault for the home lab: hardware logins, website and e-mail accounts, hardware and software keys, nested items and your own tabs. Everything is encrypted on the Pi with a key that only exists in memory while the vault is unlocked.', credits: [['Cryptography', "Node's built-in crypto: scrypt, HKDF, AES-256-GCM"]] });
+views.about = pages.about({ blurb: 'A password and credential vault for the home lab: hardware logins, website and e-mail accounts, hardware and software keys, nested items and your own types. Everything is encrypted on the Pi with a key that only exists in memory while the vault is unlocked.', credits: [['Cryptography', "Node's built-in crypto: scrypt, HKDF, AES-256-GCM"]] });
 
 // ---------- boot ---------------------------------------------------------------------------------------------------------------
 window.addEventListener('hashchange', () => { SB.wizardActive = false; });
@@ -535,7 +539,7 @@ UI.init({
       { view: 'trash', label: 'Trash', icon: '⌫' },
     ] },
     { group: 'Manage', items: [
-      { view: 'tabs', label: 'Tabs', icon: '▤', roles: ['admin'] },
+      { view: 'tabs', label: 'Types', icon: '▤', roles: ['admin'] },
       { view: 'templates', label: 'Templates', icon: '❏', roles: ['admin'] },
       { view: 'tags', label: 'Tags', icon: '#', roles: ['admin'] },
       { view: 'activity', label: 'Activity', icon: '≣', roles: ['admin'] },

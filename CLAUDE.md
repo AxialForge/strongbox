@@ -2,7 +2,7 @@
 
 Strongbox is a LAN-only credential vault that runs on the home Raspberry Pi (`aether`, behind Caddy, port 8083,
 `https://strongbox.home`). It keeps hardware logins, website and e-mail accounts, hardware and software keys and
-licences, in user-defined **tabs** with their own field templates, with **nested entries** (a server holds its VMs and
+licences, in user-defined **types** (called tabs in the code and the API) with their own field templates, with **nested entries** (a server holds its VMs and
 services), specs, notes, history and a health report. It is built on Bracket (`kit/`) and is web-only: there is
 deliberately no desktop shell, so decrypted data only ever lives in the Pi's memory and in a browser tab. It is not a
 sync service, a browser extension or a password-sharing tool.
@@ -42,7 +42,7 @@ bash -n server/install.sh
 
 ```
 app/main/vault.js        Vault: key derivation, wrap/unwrap, seal/open records, lock state, unlock throttle, rewrap, recovery
-app/main/templates.js    field types, the four default tabs, cleanTab(), strengthBits
+app/main/templates.js    field types, the five default types, cleanTab(), strengthBits
 app/main/service.js      createService: schema, every handler (via api(channel, fn(actor, ...args))), health, audit, jobs
 app/main/csvin.js        CSV reader + header mapping for password-manager exports
 app/server/server.js     roles, SENSITIVE list, and the wrapper that passes { user, ip } to every vault handler for the audit trail
@@ -67,6 +67,11 @@ app/renderer/            strength.js (shared with the server), util.js (clipboar
 `text url multiline number date select ip mac password secret totp`. `ip` and `mac` are validated on save (`normIp`, `normMac`; MACs are stored as `AA:BB:CC:DD:EE:FF`). `password` is tracked (age, history of the last 5, strength, reuse);
 `secret` is masked with nothing tracked; `totp` shows a live code (server-side, `entries:totp`); a `date` with `expiry: true` feeds the expiring list.
 Entries keep values by field key, so a template can change freely; values of removed fields stay in the blob.
+
+### Types added later
+
+`ensureDefaultTabs()` (called after every unlock) adds a default type that an older vault lacks, once, right after the default that precedes it; `kv.seededTabs`
+remembers which defaults were already offered, so a type the user deleted never comes back. Add a new default type to `DEFAULT_TABS` and it reaches existing vaults this way.
 
 ### Generator, tags, templates, network
 

@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-01
+
+### Added
+
+- A **Services** type (web apps, databases, containers, daemons, media servers…) with address, port, version, login, API key, unit name and data folder, plus a "Service / app" template. A new entry nested under a Hardware entry starts as a service. Existing vaults get the type once, after Hardware, the next time they are unlocked.
+
+### Changed
+
+- "Tab" is now called "Type" everywhere in the app.
+
 ## [0.2.0] - 2026-10-01
 
 ### Added

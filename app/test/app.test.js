@@ -31,7 +31,7 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   const made = await H('vault:create', { mode: 'password+keyfile', password: 'correct horse battery', recovery: true });
   assert.ok(made.keyFile.includes('BEGIN STRONGBOX KEY FILE') && made.recoveryKey.length === 47);
   assert.strictEqual(H('vault:status').state, 'unlocked');
-  assert.strictEqual(H('tabs:list').length, 4, 'four default tabs');
+  assert.deepStrictEqual(H('tabs:list').map(t => t.builtin), ['hardware', 'services', 'websites', 'email', 'keys'], 'five default types, Services right after Hardware');
 
   const tabs = H('tabs:list'), hw = tabs.find(t => t.builtin === 'hardware'), web = tabs.find(t => t.builtin === 'websites'), keys = tabs.find(t => t.builtin === 'keys');
   const CANARY = 'canary-pass-7f3a91c2', NOTE = 'canary-note-b81d44', TITLE = 'canary-title-nas';
@@ -93,7 +93,7 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.strictEqual(hl.reused.filter(x => x.group === hl.reused.find(y => y.title === 'Twin A').group).length, 2);
   assert.ok(hl.expiring.some(x => x.title === 'Licence' && x.days >= 4 && x.days <= 6), JSON.stringify(hl.expiring));
   assert.strictEqual(H('data:status').state, 'unlocked'); assert.ok(!JSON.stringify(H('data:status')).includes('Twin'));
-  const dash = H('data:dashboard'); assert.ok(dash.perTab.length === 4 && dash.recent.length);
+  const dash = H('data:dashboard'); assert.ok(dash.perTab.length === 5 && dash.recent.length);
 
   // trash and restore (a subtree goes together; purge is permanent)
   assert.strictEqual(H('entries:delete', vm.id), 2);
@@ -117,7 +117,7 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.deepStrictEqual(wifi.fields.map(f => f.key), ['ssid', 'key', 'band']); assert.deepStrictEqual(wifi.fields[2].options, ['2.4', '5', '6']);
   const w = H('entries:save', { tabId: wifi.id, title: 'Home', fields: { ssid: 'AXIAL', band: '5' }, secrets: { key: 'wifi-key-123' } });
   assert.strictEqual(w.fields.band, '5');
-  await fails(Promise.resolve().then(() => H('tabs:delete', wifi.id)), /choose another tab/);
+  await fails(Promise.resolve().then(() => H('tabs:delete', wifi.id)), /choose another type/);
   H('tabs:delete', wifi.id, web.id);
   assert.strictEqual(H('entries:get', w.id).tabId, web.id);
 
@@ -154,6 +154,19 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.strictEqual(H('templates:save', { id: mine.id, name: 'Renamed', tags: ['x'], tabId: hw.id }).find(t => t.id === mine.id).name, 'Renamed');
   assert.ok(!H('templates:delete', mine.id).some(t => t.id === mine.id));
   H('templates:delete', 'b:server'); assert.ok(H('templates:list').some(t => t.id === 'b:server'), 'built-ins stay');
+
+  // a service nests under hardware; types added in later versions appear once in an existing vault
+  const svcTab = H('tabs:list').find(t => t.builtin === 'services');
+  const plex = H('entries:save', { tabId: svcTab.id, parentId: server.id, title: 'MediaLedger', fields: { kind: 'Web app', url: 'http://aether:8080', port: '8080' }, secrets: { pass: 'svc-pass-123456' } });
+  assert.deepStrictEqual(H('entries:get', plex.id).path.map(p => p.title), [TITLE]);
+  H('tabs:delete', svcTab.id, web.id);                       // user removes the Services type (its entry moves to Websites)
+  svc.db.kvSet('seededTabs', ['hardware', 'websites', 'email', 'keys']); // as if the vault predates Services
+  svc.db.run("UPDATE kv SET v=? WHERE k='seededTabs'", JSON.stringify(['hardware', 'websites', 'email', 'keys']));
+  H('vault:lock'); svc.vault.fails = 0; await H('vault:unlock', { password: 'correct horse battery', keyFile: made.keyFile });
+  assert.deepStrictEqual(H('tabs:list').map(t => t.builtin), ['hardware', 'services', 'websites', 'email', 'keys'], 'Services comes back once, in place');
+  H('tabs:delete', H('tabs:list').find(t => t.builtin === 'services').id);
+  H('vault:lock'); svc.vault.fails = 0; await H('vault:unlock', { password: 'correct horse battery', keyFile: made.keyFile });
+  assert.ok(!H('tabs:list').some(t => t.builtin === 'services'), 'a type the user removed stays removed');
 
   // ---- lock, wrong factors, throttle, unlock, recovery ----------------------------------------
   H('vault:lock');

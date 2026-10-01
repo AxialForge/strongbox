@@ -121,6 +121,8 @@ remembers which defaults were already offered, so a type the user deleted never 
 
 - **Visibility is filtered where entries are decrypted** (`everything(trash, actor)` and `canSee(actor, entry)`), not in the page. Any new handler that lists, counts, searches or returns entries for an account must pass the actor through; `healthCache` is only written by admin / core runs so a restricted account's smaller numbers never reach Home Assistant. The editor sends `visibleTo` always; an edit that omits it keeps the old value.
 
+- **Account kinds decide what is stored.** `T.SECRET_KINDS` (password, pin, smartcard, recovery, other) keep a secret; saving any other kind clears `secret` and `totp` on purpose. Health judges strength and reuse only for `password` / `other`; `recovery` skips breached and old checks too. A link (`cred.link`, an entry id) is resolved by `linkInfo()` (title, user, whether it has a secret) and revealed only through `entries:reveal` with `lnk:<accountId>`, which re-checks `canSee` on the linked entry. Never copy a linked secret into the linking entry.
+
 ## Roadmap (unbuilt)
 
 - "Remember this key file on this device" (an opt-in convenience; weakens the second factor).

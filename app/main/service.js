@@ -124,7 +124,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     for (let i = 0; p && i < 50; i++) { const pr = rowOf(p); if (!pr) break; const pe = { ...blank(), ...openEntry(pr) }; if (!canSee(a, pe)) break; path.unshift({ id: pr.id, title: pe.title }); p = pr.parent_id; }
     return {
       ...light(row, e, tab), deleted: row.deleted || null, fields: plainFields(e, tab, true), secrets, path,
-      creds: e.creds.map(c => ({ id: c.id, label: c.label, user: c.user, url: c.url, note: c.note || '', hasTotp: !!c.totp, set: !!c.secret, changed: e.changed['cred:' + c.id] || null, bits: c.secret ? T.strengthBits(c.secret) : undefined, history: (e.hist['cred:' + c.id] || []).map(h => ({ t: h.t })) })),
+      creds: e.creds.map(c => ({ id: c.id, label: c.label, kind: c.kind || 'password', link: c.link || null, linkInfo: c.link ? linkInfo(c.link, a) : null, user: c.user, url: c.url, note: c.note || '', hasTotp: !!c.totp, set: !!c.secret, changed: e.changed['cred:' + c.id] || null, bits: c.secret ? T.strengthBits(c.secret) : undefined, history: (e.hist['cred:' + c.id] || []).map(h => ({ t: h.t })) })),
       specs: e.specs, nics: e.nics, notes: e.notes, visibleTo: e.visibleTo || [],
     };
   }
@@ -135,6 +135,14 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   const canSee = (a, e) => !a || !a.role || a.role === 'admin' || !(e.visibleTo && e.visibleTo.length) || e.visibleTo.includes(a.user);
   const denyReveal = (a) => { if (!canReveal(a)) throw new Error('Your account can see entries but not their passwords'); };
   const filesOf = (entryId) => db.all('SELECT id, created, size, meta FROM files WHERE entry_id=? ORDER BY id', entryId).map(r => ({ id: r.id, created: r.created, size: r.size, ...vault.open(r.meta, `filemeta/${r.id}`) }));
+  // What an account that points at another entry may show: its title and user name, never the secret.
+  const userFieldOf = (tab) => tab.fields.find(fd => fd.key === 'user') || tab.fields.find(fd => /user|login|address/i.test(fd.label) && fd.type === 'text');
+  function linkInfo(id, a) {
+    const row = rowOf(id); if (!row || row.deleted) return { missing: true };
+    const le = { ...blank(), ...openEntry(row) }; if (!canSee(a, le)) return { missing: true };
+    const tab = tabOfRow(row, tabMap()), uf = userFieldOf(tab);
+    return { id: row.id, title: le.title, user: uf ? le.fields[uf.key] || '' : '', hasSecret: !!quickRef(le, tab) };
+  }
   const present = (id, a) => { const row = rowOf(id); if (!row) throw new Error('No such entry'); const tabs = tabMap(); const e0 = { ...blank(), ...openEntry(row) }; if (!canSee(a, e0)) throw new Error('No such entry'); const f = full(row, e0, tabOfRow(row, tabs), a); f.canReveal = canReveal(a); f.files = filesOf(row.id); return f; };
 
   // ---- writing -----------------------------------------------------------------------------
@@ -204,9 +212,13 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     for (const c of (Array.isArray(input.creds) ? input.creds : []).slice(0, 50)) {
       const pc = c.id && prevCreds.get(c.id);
       const cid = pc ? pc.id : crypto.randomBytes(6).toString('hex');
-      const out = { id: cid, label: clip(c.label, 80).trim(), user: clip(c.user, 200).trim(), url: clip(c.url, 300).trim(), note: clip(c.note, 300).trim(), secret: pc ? pc.secret : '', totp: pc ? pc.totp || '' : '' };
+      const kind = T.KIND_IDS.includes(c.kind) ? c.kind : (pc && pc.kind) || 'password';
+      let link = 'link' in c ? (Number(c.link) || null) : (pc && pc.link) || null;
+      if (link && (link === id || !rowOf(link))) link = null;
+      const out = { id: cid, kind, link, label: clip(c.label, 80).trim(), user: clip(c.user, 200).trim(), url: clip(c.url, 300).trim(), note: clip(c.note, 300).trim(), secret: pc ? pc.secret : '', totp: pc ? pc.totp || '' : '' };
       if (typeof c.totp === 'string') { const nt = cleanSecret({ type: 'totp' }, c.totp); if (nt !== out.totp) { out.totp = nt; e.changed['cred:' + cid + ':totp'] = now; } }
       if (typeof c.secret === 'string') { const nv = clip(c.secret, 2000); if (rotate(e, 'cred:' + cid, out.secret, nv, now, old, true)) out.secret = nv; }
+      if (!T.SECRET_KINDS.has(kind)) { out.secret = ''; out.totp = ''; } // a fingerprint or a hardware key has nothing to store
       e.creds.push(out);
     }
     for (const k of Object.keys(e.changed)) if (k.startsWith('cred:') && !e.creds.some(c => k === 'cred:' + c.id || k === 'cred:' + c.id + ':totp')) { delete e.changed[k]; delete e.hist[k]; }
@@ -309,8 +321,17 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     const row = rowOf(id); if (!row) throw new Error('No such entry');
     const e = { ...blank(), ...openEntry(row) };
     if (!canSee(a, e)) throw new Error('No such entry');
-    const m = /^(field|cred|hist):(.+)$/.exec(String(ref || '')); if (!m) throw new Error('Nothing to reveal');
+    const m = /^(field|cred|hist|lnk):(.+)$/.exec(String(ref || '')); if (!m) throw new Error('Nothing to reveal');
     let value, detail = String(ref);
+    if (m[1] === 'lnk') { // the password of the entry this account signs in with
+      const c = e.creds.find(x => x.id === m[2]), lrow = c && c.link && rowOf(c.link); if (!lrow || lrow.deleted) throw new Error('That linked entry is gone');
+      const le = { ...blank(), ...openEntry(lrow) }; if (!canSee(a, le)) throw new Error('No such entry');
+      const q = quickRef(le, tabOfRow(lrow, tabMap())); if (!q) throw new Error('The linked entry has no password');
+      const [kind, key] = [q.slice(0, q.indexOf(':')), q.slice(q.indexOf(':') + 1)];
+      value = kind === 'field' ? le.fields[key] : (le.creds.find(x => x.id === key) || {}).secret;
+      audit(a, 'reveal', row.id, `lnk:${m[2]} -> #${lrow.id}`);
+      if (!value) throw new Error('That value is empty'); return value;
+    }
     if (m[1] === 'field') value = e.fields[m[2]];
     else if (m[1] === 'cred') { const c = e.creds.find(x => x.id === m[2]); value = c && c.secret; }
     else { const cut = m[2].lastIndexOf(':'); const h = (e.hist[m[2].slice(0, cut)] || [])[Number(m[2].slice(cut + 1))]; value = h && h.v; detail = 'hist:' + m[2]; }
@@ -352,7 +373,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       const path = []; let p = row.parent_id;
       for (let i = 0; p && i < 20; i++) { const pr = rowOf(p); if (!pr) break; path.unshift(openEntry(pr).title); p = pr.parent_id; }
       docs.push({ id: row.id, depth, title: e.title, subtitle: e.subtitle, type: tab.name, path, tags: e.tags, fields, notes: opts.notes === false ? '' : e.notes, specs: opts.notes === false ? [] : e.specs, nics: e.nics,
-        accounts: e.creds.map(c => ({ label: c.label, user: c.user, url: c.url, note: c.note || '', password: mask(c.secret), totp: mask(c.totp) })), created: row.created, updated: row.updated });
+        accounts: e.creds.map(c => ({ label: c.label, kind: (T.ACCOUNT_KINDS.find(k => k.id === (c.kind || 'password')) || {}).label || 'Password', user: c.user, url: c.url, note: c.note || '', password: mask(c.secret), totp: mask(c.totp) })), created: row.created, updated: row.updated });
       if (opts.children) for (const k of kidsOf(row.id)) visit(k, depth + 1);
     };
     for (const id of (Array.isArray(ids) ? ids : [ids]).slice(0, 500)) visit(Number(id), 0);
@@ -442,7 +463,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       const url = urlF ? e.fields[urlF.key] || '' : '';
       const main = passF.map(fd => e.fields[fd.key]).find(Boolean);
       if (main) rows.push({ name: e.title, url, user: userF ? e.fields[userF.key] || '' : '', pass: main, note: e.notes });
-      for (const c of e.creds) if (c.secret) rows.push({ name: `${e.title} (${c.label || c.user || 'account'})`, url: c.url || url, user: c.user, pass: c.secret, note: c.note || '' });
+      for (const c of e.creds) if (c.secret && ['password', 'other'].includes(c.kind || 'password')) rows.push({ name: `${e.title} (${c.label || c.user || 'account'})`, url: c.url || url, user: c.user, pass: c.secret, note: c.note || '' });
     }
     audit(a, 'csv_export', null, `${rows.length} rows from one type`);
     return { name: `strongbox-${T.slug ? T.slug(tab.name) : 'export'}-passwords.csv`, rows: rows.length, text: csv(rows, [['name', r => r.name], ['url', r => r.url], ['username', r => r.user], ['password', r => r.pass], ['note', r => r.note]]).replace(/^\uFEFF/, '') };
@@ -498,7 +519,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
 
   const builtinTemplates = (tabs) => T.BUILTIN_TEMPLATES.map(b => {
     const all = [...tabs.values()], tab = all.find(t => t.builtin === b.tabKey) || all[0];
-    return { id: b.id, builtin: true, name: b.name, icon: b.icon, tabId: tab ? tab.id : null, subtitle: '', tags: b.tags, fields: b.fields, specs: b.specs.map(k => ({ k, v: '' })), creds: b.creds.map(label => ({ label, user: '', url: '' })), nics: b.nics.map(label => ({ label })) };
+    return { id: b.id, builtin: true, name: b.name, icon: b.icon, tabId: tab ? tab.id : null, subtitle: '', tags: b.tags, fields: b.fields, specs: b.specs.map(k => ({ k, v: '' })), creds: b.creds.map(c => (typeof c === 'string' ? { label: c, user: '', url: '', kind: 'password' } : { label: c.label, user: '', url: '', kind: c.kind || 'password' })), nics: b.nics.map(label => ({ label })) };
   });
   const listTemplates = () => { const tabs = tabMap(); return [...getPref('templates', []).map(t => ({ ...t, builtin: false })), ...builtinTemplates(tabs)]; };
   api('templates:list', () => listTemplates());
@@ -509,7 +530,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       const e = { ...blank(), ...openEntry(row) }, tab = tabOfRow(row, tabMap()), keep = !!t.keepValues;
       const plain = plainFields(e, tab, true), fields = {};
       for (const fd of tab.fields) if (plain[fd.key] !== undefined && (keep || fd.type === 'select')) fields[fd.key] = plain[fd.key];
-      body = { name: t.name, icon: tab.icon, tabId: row.tab_id, subtitle: keep ? e.subtitle : '', tags: e.tags, fields, specs: e.specs.map(s => ({ k: s.k, v: keep ? s.v : '' })), creds: e.creds.map(c => ({ label: c.label, user: keep ? c.user : '', url: keep ? c.url : '' })), nics: e.nics.map(n => ({ label: n.label })) };
+      body = { name: t.name, icon: tab.icon, tabId: row.tab_id, subtitle: keep ? e.subtitle : '', tags: e.tags, fields, specs: e.specs.map(s => ({ k: s.k, v: keep ? s.v : '' })), creds: e.creds.map(c => ({ label: c.label, kind: c.kind || 'password', user: keep ? c.user : '', url: keep ? c.url : '' })), nics: e.nics.map(n => ({ label: n.label })) };
     }
     const clean = T.cleanTemplate(body);
     if (clean.tabId && !tabMap().has(clean.tabId)) clean.tabId = null;
@@ -587,16 +608,15 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     for (const { row, e } of everything(false, a)) {
       out.total++;
       const tab = tabOfRow(row, tabs), base = { id: row.id, title: e.title, tabId: row.tab_id };
-      const checks = [...tab.fields.filter(fd => fd.type === 'password').map(fd => ({ label: fd.label, v: e.fields[fd.key], at: e.changed[fd.key] })), ...e.creds.map(cr => ({ label: cr.label || 'Login', v: cr.secret, at: e.changed['cred:' + cr.id] }))];
-      for (const { label, v, at } of checks) {
+      const checks = [...tab.fields.filter(fd => fd.type === 'password').map(fd => ({ label: fd.label, v: e.fields[fd.key], at: e.changed[fd.key] })), ...e.creds.map(cr => ({ label: cr.label || 'Login', v: cr.secret, at: e.changed['cred:' + cr.id], kind: cr.kind || 'password' }))];
+      for (const { label, v, at, kind = 'password' } of checks) {
         if (!v) continue;
         out.passwords++;
-        if (isBreached(v)) out.breached.push({ ...base, label });
-        const bits = T.strengthBits(v);
-        if (bits < (Number(c.weakBits) || 50)) out.weak.push({ ...base, label, bits });
-        if (staleMs && now - (at || row.created) > staleMs) out.stale.push({ ...base, label, days: Math.floor((now - (at || row.created)) / DAY) });
-        const hk = crypto.createHmac('sha256', vault.ek).update(v).digest('hex');
-        (groups.get(hk) || groups.set(hk, []).get(hk)).push({ ...base, label });
+        const strong = ['password', 'other'].includes(kind); // a PIN is short by nature and a recovery key is random: neither is judged on strength or reuse
+        if (kind !== 'recovery' && isBreached(v)) out.breached.push({ ...base, label });
+        if (strong) { const bits = T.strengthBits(v); if (bits < (Number(c.weakBits) || 50)) out.weak.push({ ...base, label, bits }); }
+        if (kind !== 'recovery' && staleMs && now - (at || row.created) > staleMs) out.stale.push({ ...base, label, days: Math.floor((now - (at || row.created)) / DAY) });
+        if (strong) { const hk = crypto.createHmac('sha256', vault.ek).update(v).digest('hex'); (groups.get(hk) || groups.set(hk, []).get(hk)).push({ ...base, label }); }
       }
       if (e.rotateDays && checks.some(c => c.v)) { // passwords the owner wants changed on a schedule
         const last = Math.max(row.created, ...checks.filter(c => c.v).map(c => c.at || row.created)), age = Math.floor((now - last) / DAY);

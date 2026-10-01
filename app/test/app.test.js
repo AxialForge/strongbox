@@ -32,7 +32,7 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   const made = await H('vault:create', { mode: 'password+keyfile', password: 'correct horse battery', recovery: true });
   assert.ok(made.keyFile.includes('BEGIN STRONGBOX KEY FILE') && made.recoveryKey.length === 47);
   assert.strictEqual(H('vault:status').state, 'unlocked');
-  assert.deepStrictEqual(H('tabs:list').map(t => t.builtin), ['hardware', 'services', 'websites', 'email', 'wifi', 'keys'], 'six default types, Services right after Hardware');
+  assert.deepStrictEqual(H('tabs:list').map(t => t.builtin), ['hardware', 'services', 'websites', 'email', 'wifi', 'mobile', 'keys'], 'seven default types, Services right after Hardware');
 
   const tabs = H('tabs:list'), hw = tabs.find(t => t.builtin === 'hardware'), web = tabs.find(t => t.builtin === 'websites'), keys = tabs.find(t => t.builtin === 'keys');
   const CANARY = 'canary-pass-7f3a91c2', NOTE = 'canary-note-b81d44', TITLE = 'canary-title-nas';
@@ -94,7 +94,7 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.strictEqual(hl.reused.filter(x => x.group === hl.reused.find(y => y.title === 'Twin A').group).length, 2);
   assert.ok(hl.expiring.some(x => x.title === 'Licence' && x.days >= 4 && x.days <= 6), JSON.stringify(hl.expiring));
   assert.strictEqual(H('data:status').state, 'unlocked'); assert.ok(!JSON.stringify(H('data:status')).includes('Twin'));
-  const dash = H('data:dashboard'); assert.ok(dash.perTab.length === 6 && dash.recent.length);
+  const dash = H('data:dashboard'); assert.ok(dash.perTab.length === 7 && dash.recent.length);
 
   // trash and restore (a subtree goes together; purge is permanent)
   assert.strictEqual(H('entries:delete', vm.id), 2);
@@ -164,7 +164,7 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   svc.db.kvSet('seededTabs', ['hardware', 'websites', 'email', 'keys']); // as if the vault predates Services
   svc.db.run("UPDATE kv SET v=? WHERE k='seededTabs'", JSON.stringify(['hardware', 'websites', 'email', 'keys']));
   H('vault:lock'); svc.vault.fails = 0; await H('vault:unlock', { password: 'correct horse battery', keyFile: made.keyFile });
-  assert.deepStrictEqual(H('tabs:list').map(t => t.builtin), ['hardware', 'services', 'websites', 'email', 'wifi', 'keys'], 'Services comes back once, in place');
+  assert.deepStrictEqual(H('tabs:list').map(t => t.builtin), ['hardware', 'services', 'websites', 'email', 'wifi', 'mobile', 'keys'], 'Services comes back once, in place');
   H('tabs:delete', H('tabs:list').find(t => t.builtin === 'services').id);
   H('vault:lock'); svc.vault.fails = 0; await H('vault:unlock', { password: 'correct horse battery', keyFile: made.keyFile });
   assert.ok(!H('tabs:list').some(t => t.builtin === 'services'), 'a type the user removed stays removed');
@@ -338,6 +338,38 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.deepStrictEqual(H('entries:save', { id: forAmy.id, tabId: hw.id, title: 'For Amy', visibleTo: ['amy', 'ben', ' '] }).visibleTo, ['amy', 'ben']);
   assert.deepStrictEqual(H('entries:save', { id: forAmy.id, tabId: hw.id, title: 'For Amy', visibleTo: [] }).visibleTo, []); assert.ok(ids(benU).includes(forAmy.id), 'back to everyone');
   assert.deepStrictEqual(H('entries:save', { id: forAmy.id, tabId: hw.id, title: 'For Amy' }).visibleTo, [], 'an edit that says nothing keeps the setting');
+
+  // ---- account kinds (PIN, fingerprint, hardware key…), links between entries, the Mobile type ------------------
+  const mobileTab = H('tabs:list').find(t => t.builtin === 'mobile');
+  assert.ok(mobileTab && mobileTab.fields.some(f => f.key === 'pin' && f.type === 'secret') && mobileTab.fields.some(f => f.key === 'imei'));
+  assert.ok(['b:pc', 'b:phone', 'b:sso'].every(id => H('templates:list').some(t => t.id === id)));
+  const tpc = H('templates:list').find(t => t.id === 'b:pc'); assert.deepStrictEqual(tpc.creds.map(c => c.kind), ['password', 'pin', 'biometric', 'hwkey', 'recovery']); assert.strictEqual(H('templates:list').find(t => t.id === 'b:phone').tabId, mobileTab.id);
+  const yubi = H('entries:save', { tabId: keys.id, title: 'YubiKey 5C', fields: { kind: 'Hardware security key', serial: '19283746' }, secrets: { pin: '482915' } });
+  const gmail = H('entries:save', { tabId: H('tabs:list').find(t => t.builtin === 'email').id, title: 'Gmail login', fields: { address: 'me@gmail.test' }, secrets: { pass: 'Gm4!kP8#xN2$vL6m' } });
+  const pc = H('entries:save', { tabId: hw.id, title: 'Desktop PC', fields: { kind: 'PC' }, creds: [
+    { label: 'Windows password', kind: 'password', user: 'joe', secret: 'Wn7!qZ2#mK9$xT4p' }, { label: 'Hello PIN', kind: 'pin', secret: '2468' }, { label: 'Fingerprint', kind: 'biometric', note: 'right index, left thumb', secret: 'ignored' },
+    { label: 'Security key', kind: 'hwkey', link: yubi.id, note: 'desk drawer' }, { label: 'BitLocker', kind: 'recovery', secret: '123456-234567-345678' }] });
+  assert.deepStrictEqual(pc.creds.map(c => c.kind), ['password', 'pin', 'biometric', 'hwkey', 'recovery']);
+  assert.strictEqual(pc.creds[2].set, false, 'a fingerprint stores nothing, whatever was sent'); assert.strictEqual(pc.creds[3].linkInfo.title, 'YubiKey 5C'); assert.strictEqual(pc.creds[3].linkInfo.user, '');
+  assert.strictEqual(H('entries:reveal', pc.id, 'cred:' + pc.creds[1].id), '2468');
+  const hh = H('vault:health');
+  assert.ok(!hh.weak.some(x => x.id === pc.id && x.label === 'Hello PIN') && !hh.weak.some(x => x.id === pc.id && x.label === 'BitLocker'), 'a PIN or a recovery key is not judged on strength');
+  assert.ok(hh.breached.some(x => x.id === pc.id && x.label === 'Hello PIN') === false, '2468 is not in the common list');
+  const pin1234 = H('entries:save', { tabId: hw.id, title: 'Weak PIN box', creds: [{ label: 'PIN', kind: 'pin', secret: '1234' }] }); assert.ok(H('vault:health').breached.some(x => x.id === pin1234.id), 'but a famous PIN is flagged');
+  const plexApp = H('entries:save', { tabId: hw.id, title: 'Plex app', creds: [{ label: 'Sign-in', kind: 'linked', link: gmail.id }, { label: 'Local admin', kind: 'password', user: 'admin', secret: 'Px8!wE5#nQ7rTz2k' }] });
+  assert.deepStrictEqual([plexApp.creds[0].kind, plexApp.creds[0].linkInfo.title, plexApp.creds[0].linkInfo.user, plexApp.creds[0].linkInfo.hasSecret], ['linked', 'Gmail login', 'me@gmail.test', true]);
+  assert.strictEqual(H('entries:reveal', plexApp.id, 'lnk:' + plexApp.creds[0].id), 'Gm4!kP8#xN2$vL6m', 'the linked entry password, through the account');
+  assert.ok(!JSON.stringify(plexApp).includes('Gm4!kP8'), 'never in the entry itself');
+  assert.strictEqual(H('entries:save', { id: plexApp.id, tabId: plexApp.tabId, title: 'Plex app', creds: plexApp.creds.map(c => ({ id: c.id, label: c.label, user: c.user })) }).creds[0].link, gmail.id, 'an edit that sends no link keeps it');
+  const hiddenLogin = H('entries:save', { tabId: gmail.tabId, title: 'Hidden login', fields: { address: 'secret@x.test' }, secrets: { pass: 'Hd5!rT9#qW3$zC7b' }, visibleTo: ['@admins'] });
+  const sso = H('entries:save', { tabId: plexApp.tabId, title: 'Uses hidden login', creds: [{ label: 'Sign-in', kind: 'linked', link: hiddenLogin.id }] });
+  assert.strictEqual(call({ user: 'ben', role: 'standard' }, 'entries:get', sso.id).creds[0].linkInfo.missing, true, 'a link to a hidden entry shows nothing');
+  assert.throws(() => call({ user: 'ben', role: 'standard' }, 'entries:reveal', sso.id, 'lnk:' + sso.creds[0].id), /No such entry|gone/);
+  assert.strictEqual(call({ user: 'amy', role: 'admin' }, 'entries:reveal', sso.id, 'lnk:' + sso.creds[0].id), 'Hd5!rT9#qW3$zC7b');
+  H('entries:delete', gmail.id); assert.strictEqual(H('entries:get', plexApp.id).creds[0].linkInfo.missing, true, 'a link to a deleted entry says so'); H('entries:restore', gmail.id);
+  const exp = H('entries:exportCsv', plexApp.tabId).text; assert.ok(exp.includes('admin,Px8!wE5#nQ7rTz2k') && !exp.includes('Gm4!kP8'), 'CSV export takes password accounts, never a link');
+  assert.ok(H('entries:print', [pc.id], {}).docs[0].accounts.map(c => c.kind).includes('PIN'));
+  const fromPc = H('templates:save', { fromEntry: pc.id, name: 'My PC shape' }).find(t => t.name === 'My PC shape'); assert.deepStrictEqual(fromPc.creds.map(c => c.kind), ['password', 'pin', 'biometric', 'hwkey', 'recovery']); assert.ok(fromPc.creds.every(c => c.user === ''));
 
   // ---- attachments: encrypted, searchable by nobody, gone with the entry ---------------------------------------
   const FILE_MARK = 'canary-file-bytes-5d2e', FILE_NAME = 'canary-name-serial-plate.png';

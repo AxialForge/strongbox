@@ -9,6 +9,7 @@ A LAN-only, locally encrypted vault for hardware, website, e-mail and key creden
 - **Templates** (built in, or saved from any entry), **coloured tags**, **IP and MAC addresses** with extra network interfaces and a network table.
 - **Safety net**: restore a backup from the app, rotate the encryption key, attachments, an emergency sheet, rotation reminders, a known-breached password check, read-only accounts, Wi-Fi QR codes, bulk actions.
 - **Password generator** with presets and requirements (length, required kinds of characters, the symbols a device allows).
+- **Many ways to sign in**: each account has a kind (password, PIN, fingerprint, hardware key, passkey, recovery key, or "signs in with another entry"), so one PC can hold all its logins and Plex can point at the Gmail account it uses.
 - **Specs and notes** on every entry, tags, favorites, extra logins, password history, live authenticator codes.
 - **Unlock like a Synology volume**: a passphrase, a key file, or both, plus an optional recovery key. Auto-locks when idle; a reboot locks it.
 - **Encrypted at rest** (scrypt → AES-256-GCM, every record separately). Secrets are shown only on request and logged. A health report flags weak, reused, old and expiring items. Trash, activity log, encrypted backups.

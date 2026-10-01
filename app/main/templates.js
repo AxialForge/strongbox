@@ -19,6 +19,15 @@ const FIELD_TYPES = ['text', 'url', 'multiline', 'number', 'date', 'select', 'ip
 const SECRET_TYPES = new Set(['password', 'secret', 'totp']);
 const TAB_COLORS = ['blue', 'violet', 'pink', 'red', 'amber', 'green', 'teal', 'slate'];
 
+// Every account on an entry has a kind, so a PC can hold a Windows password, a Hello PIN, a fingerprint and a security key
+// side by side. `secret` kinds store a value; the others are notes, or a link to another entry (a YubiKey, a Gmail login).
+const ACCOUNT_KINDS = [
+  { id: 'password', label: 'Password', secret: true }, { id: 'pin', label: 'PIN', secret: true }, { id: 'hwkey', label: 'Hardware key', secret: false },
+  { id: 'biometric', label: 'Fingerprint / face', secret: false }, { id: 'passkey', label: 'Passkey', secret: false }, { id: 'smartcard', label: 'Smart card (PIN)', secret: true },
+  { id: 'recovery', label: 'Recovery key', secret: true }, { id: 'linked', label: 'Signs in with another entry', secret: false }, { id: 'other', label: 'Other', secret: true },
+];
+const KIND_IDS = ACCOUNT_KINDS.map(k => k.id), SECRET_KINDS = new Set(ACCOUNT_KINDS.filter(k => k.secret).map(k => k.id));
+
 const f = (key, label, type = 'text', extra = {}) => ({ key, label, type, ...extra });
 
 const DEFAULT_TABS = [
@@ -44,6 +53,12 @@ const DEFAULT_TABS = [
     f('hidden', 'Hidden network', 'select', { options: ['No', 'Yes'] }), f('band', 'Band', 'select', { options: ['2.4 GHz', '5 GHz', '6 GHz', 'Dual / tri band'] }),
     f('router', 'Router / access point'), f('vlan', 'VLAN / network'), f('location', 'Where it reaches'),
   ] },
+  { builtin: 'mobile', name: 'Mobile devices', icon: '☎', color: 'red', fields: [
+    f('kind', 'Kind', 'select', { options: ['Phone', 'Tablet', 'Smartwatch', 'E-reader', 'Other'] }), f('model', 'Make / model'), f('os', 'OS / version'), f('phone', 'Phone number'),
+    f('imei', 'IMEI'), f('serial', 'Serial number'), f('carrier', 'Carrier / plan'), f('account', 'Linked account (Apple ID / Google)'),
+    f('pin', 'Screen lock PIN / passcode', 'secret', { gen: 'pin6' }), f('simpin', 'SIM PIN', 'secret', { gen: 'pin4' }), f('findmy', 'Find My / Find Device', 'select', { options: ['On', 'Off'] }),
+    f('mac', 'Wi-Fi MAC address', 'mac'), f('bought', 'Purchased', 'date'), f('warranty', 'Warranty until', 'date', { expiry: true }),
+  ] },
   { builtin: 'keys', name: 'Keys & licences', icon: '⚿', color: 'green', fields: [
     f('kind', 'Kind', 'select', { options: ['Hardware security key', 'Software licence', 'SSH key', 'API key', 'GPG key', 'Wi-Fi', 'Certificate', 'Other'] }),
     f('vendor', 'Vendor / product'), f('serial', 'Serial / key ID'), f('key', 'Key / secret', 'secret', { multiline: true }), f('pin', 'PIN / passphrase', 'secret', { gen: 'pin6' }),
@@ -55,6 +70,11 @@ const DEFAULT_TABS = [
 // in the vault (prefs: templates) and can be made from any entry with "Save as template".
 const BUILTIN_TEMPLATES = [
   { id: 'b:server', name: 'Server', icon: '▦', tabKey: 'hardware', tags: ['server'], fields: { kind: 'Server' }, specs: ['CPU', 'RAM', 'Storage', 'OS', 'Power supply'], creds: ['IPMI / iDRAC', 'SSH', 'Web UI'], nics: ['eth0', 'IPMI'] },
+  { id: 'b:pc', name: 'PC / laptop', icon: '▦', tabKey: 'hardware', tags: ['pc'], fields: { kind: 'PC' }, specs: ['CPU', 'RAM', 'Storage', 'GPU', 'OS'],
+    creds: [{ label: 'Windows password', kind: 'password' }, { label: 'Windows Hello PIN', kind: 'pin' }, { label: 'Fingerprint', kind: 'biometric' }, { label: 'Security key', kind: 'hwkey' }, { label: 'BitLocker recovery key', kind: 'recovery' }], nics: ['Ethernet', 'Wi-Fi'] },
+  { id: 'b:phone', name: 'Phone / tablet', icon: '☎', tabKey: 'mobile', tags: ['mobile'], fields: { kind: 'Phone' }, specs: ['Storage', 'Screen'],
+    creds: [{ label: 'Screen lock', kind: 'pin' }, { label: 'Fingerprint / face unlock', kind: 'biometric' }, { label: 'Apple ID / Google account', kind: 'linked' }], nics: ['Wi-Fi'] },
+  { id: 'b:sso', name: 'Service using another login', icon: '⚙', tabKey: 'services', tags: ['service'], fields: { kind: 'Web app' }, specs: ['Data folder'], creds: [{ label: 'Sign-in', kind: 'linked' }, { label: 'Local admin', kind: 'password' }], nics: [] },
   { id: 'b:vm', name: 'VM / container', icon: '▦', tabKey: 'hardware', tags: ['vm'], fields: { kind: 'Virtual machine' }, specs: ['vCPU', 'RAM', 'Disk', 'OS'], creds: ['Console'], nics: ['eth0'] },
   { id: 'b:nas', name: 'NAS', icon: '▦', tabKey: 'hardware', tags: ['storage'], fields: { kind: 'NAS' }, specs: ['Bays', 'Capacity', 'RAID', 'Firmware'], creds: ['Web UI', 'SSH', 'Share user'], nics: ['LAN 1', 'LAN 2'] },
   { id: 'b:router', name: 'Router / firewall', icon: '▦', tabKey: 'hardware', tags: ['network'], fields: { kind: 'Router' }, specs: ['Firmware', 'Ports', 'Uplink'], creds: ['Web UI', 'SSH / console'], nics: ['LAN', 'WAN'] },
@@ -103,7 +123,7 @@ function cleanTemplate(t = {}) {
     tags: [...new Set((Array.isArray(t.tags) ? t.tags : []).map(x => clip(x, 40).trim().toLowerCase()).filter(Boolean))].slice(0, 30),
     fields,
     specs: (Array.isArray(t.specs) ? t.specs : []).map(s => ({ k: clip(s.k, 60).trim(), v: clip(s.v, 300).trim() })).filter(s => s.k || s.v).slice(0, 100),
-    creds: (Array.isArray(t.creds) ? t.creds : []).map(c => ({ label: clip(c.label, 80).trim(), user: clip(c.user, 200).trim(), url: clip(c.url, 300).trim() })).filter(c => c.label || c.user).slice(0, 50),
+    creds: (Array.isArray(t.creds) ? t.creds : []).map(c => ({ label: clip(c.label, 80).trim(), user: clip(c.user, 200).trim(), url: clip(c.url, 300).trim(), kind: KIND_IDS.includes(c.kind) ? c.kind : 'password' })).filter(c => c.label || c.user).slice(0, 50),
     nics: (Array.isArray(t.nics) ? t.nics : []).map(n => ({ label: clip(n.label, 60).trim() })).filter(n => n.label).slice(0, 30),
   };
 }
@@ -138,4 +158,4 @@ function normMac(v) {
 
 const { strengthBits } = require('../renderer/strength');
 
-module.exports = { FIELD_TYPES, SECRET_TYPES, TAB_COLORS, DEFAULT_TABS, BUILTIN_TEMPLATES, TAB_ICONS, cleanTab, cleanTemplate, normIp, normMac, normPort, slug, strengthBits };
+module.exports = { ACCOUNT_KINDS, KIND_IDS, SECRET_KINDS, FIELD_TYPES, SECRET_TYPES, TAB_COLORS, DEFAULT_TABS, BUILTIN_TEMPLATES, TAB_ICONS, cleanTab, cleanTemplate, normIp, normMac, normPort, slug, strengthBits };

@@ -1,0 +1,55 @@
+# Build output
+dist/
+build/*
+!build/icon.png
+!build/icon.ico
+out/
+release/
+*.exe
+*.msi
+.shots/
+
+# Node
+node_modules/
+npm-debug.log*
+.npm/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets and local config — never commit these
+.env
+.env.*
+!.env.example
+secrets.json
+credentials.json
+*.pem
+*.pfx
+
+# Local runtime state
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+settings.json
+web.json
+logs/
+*.log
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Dev data folders (hold real keys and passwords)
+.devdata/
+.devdata-desktop/
+.claude/

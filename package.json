@@ -1,0 +1,24 @@
+{
+  "name": "strongbox",
+  "productName": "Strongbox",
+  "version": "0.1.0",
+  "description": "A LAN-only, locally encrypted vault for hardware, website, e-mail and key credentials on a Raspberry Pi",
+  "author": "AxialForge",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "web": "node app/server/server.js",
+    "dev": "node app/server/server.js --data=.devdata --port=8083",
+    "test": "node kit/test/kit.test.js && node kit/test/glossary.test.js && node app/test/app.test.js",
+    "pack:server": "node kit/ops/pack-server.js",
+    "kit:upgrade": "node tools/kit-upgrade.js",
+    "icons": "node tools/make-icon.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AxialForge/strongbox.git"
+  }
+}

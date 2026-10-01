@@ -1,0 +1,11 @@
+{
+  "name": "Strongbox",
+  "slug": "strongbox",
+  "tagline": "A LAN-only, locally encrypted vault for hardware, website, e-mail and key credentials on a Raspberry Pi",
+  "repo": "https://github.com/AxialForge/strongbox",
+  "port": 8083,
+  "bridge": "api",
+  "shells": [
+    "web"
+  ]
+}

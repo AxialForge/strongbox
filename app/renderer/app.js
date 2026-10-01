@@ -73,7 +73,7 @@ views.vault = guard(async (arg) => {
   store.set('vaultTab', String(tabId));
   const byTitle = (a, b) => (b.favorite - a.favorite) || a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
   const roots = list.filter(e => !e.parentId || !byId.has(e.parentId) || (tabId !== 'all' && byId.get(e.parentId).tabId !== tabId)).filter(e => tabId === 'all' || e.tabId === tabId).sort(byTitle);
-  const detail = (e) => { const t = tabOf.get(e.tabId); const fs = (t ? t.fields : []).filter(f => !['date', 'multiline'].includes(f.type) && e.fields[f.key]); fs.sort((a, b) => (['ip', 'mac'].includes(b.type) ? 1 : 0) - (['ip', 'mac'].includes(a.type) ? 1 : 0)); return fs.slice(0, 3).map(f => e.fields[f.key]).join(' · '); };
+  const detail = (e) => { const t = tabOf.get(e.tabId); const fs = (t ? t.fields : []).filter(f => !['date', 'multiline'].includes(f.type) && e.fields[f.key] && !(f.type === 'port' && e.fields[f.key] === 'caddy')); fs.sort((a, b) => (['ip', 'mac'].includes(b.type) ? 1 : 0) - (['ip', 'mac'].includes(a.type) ? 1 : 0)); return fs.slice(0, 3).map(f => e.fields[f.key]).join(' · '); };
   const rowHtml = (e, depth, flat) => {
     const t = tabOf.get(e.tabId) || { icon: '?', name: '?' }, k = kids.get(e.id) || [], isOpen = openSet.has(e.id);
     const path = flat ? (() => { const parts = []; let p = byId.get(e.parentId); for (let i = 0; p && i < 20; i++) { parts.unshift(p.title); p = byId.get(p.parentId); } return parts.length ? `<span class="tiny muted">${esc(parts.join(' › '))} › </span>` : ''; })() : '';
@@ -122,17 +122,21 @@ views.entry = guard(async (id) => {
   const [e, tabs, all] = await Promise.all([api.entries.get(Number(id)), api.tabs.list(), api.entries.list(), SB.loadTags()]);
   const tab = tabs.find(t => t.id === e.tabId) || { name: '?', icon: '?', fields: [] };
   const kids = all.filter(x => x.parentId === e.id).sort((a, b) => a.title.localeCompare(b.title));
+  const hideEmpty = store.get('hideEmpty', '1') === '1';
+  let emptyCount = 0;
+  const emptyRow = (fd) => { emptyCount++; return hideEmpty ? '' : `<tr><td>${esc(fd.label)}</td><td class="muted">—</td></tr>`; };
   const fieldRows = tab.fields.map(fd => {
     if (['password', 'secret', 'totp'].includes(fd.type)) {
       const s = e.secrets[fd.key] || {};
-      if (!s.set) return `<tr><td>${esc(fd.label)}</td><td class="muted">—</td></tr>`;
+      if (!s.set) return emptyRow(fd);
       if (fd.type === 'totp') return `<tr><td>${esc(fd.label)}</td><td><div class="srow"><span class="val mono totp" data-key="${esc(fd.key)}">••• •••</span> <button class="small" data-totp="${esc(fd.key)}">Show code</button> <button class="small" data-totpcopy="${esc(fd.key)}" hidden>Copy</button> <span class="tiny muted totp-left"></span></div></td></tr>`;
       return `<tr><td>${esc(fd.label)}</td><td><div class="srow"><span class="val mono ${fd.multiline ? 'pre' : ''}" data-mask="${SB.MASK}">${SB.MASK}</span> <button class="small" data-reveal="field:${esc(fd.key)}">Show</button> <button class="small" data-copy="field:${esc(fd.key)}" data-what="Copied">Copy</button>${s.history.length ? ` <button class="small" data-hist="${esc(fd.key)}" data-label="${esc(fd.label)}">History (${s.history.length})</button>` : ''} ${fd.type === 'password' ? pwAge(s.changed) : ''}</div>${fd.type === 'password' && s.bits != null ? `<div class="pwmeter">${SB.meterHtml(s.bits)}</div>` : ''}</td></tr>`;
     }
     const val = e.fields[fd.key];
-    if (!val) return `<tr><td>${esc(fd.label)}</td><td class="muted">—</td></tr>`;
+    if (!val) return emptyRow(fd);
     let html;
     if (fd.type === 'url') html = safeUrl(val) ? `<a href="${esc(val)}" target="_blank" rel="noopener noreferrer">${esc(val)}</a>` : esc(val);
+    else if (fd.type === 'port' && val === 'caddy') return `<tr><td>${esc(fd.label)}</td><td><span class="badge c1">via Caddy</span> <span class="muted tiny">no port needed</span></td></tr>`;
     else if (fd.type === 'date') { const d = Math.ceil((Date.parse(val + 'T00:00:00') - Date.now()) / DAY); html = `${esc(val)}${fd.expiry ? ` <span class="badge ${d < 0 ? 'bad' : d <= 60 ? 'warn' : ''}">${d < 0 ? `expired ${-d} d ago` : `in ${d} d`}</span>` : ''}`; }
     else html = `<span class="${fd.type === 'multiline' ? 'pre' : ''}">${esc(val)}</span>`;
     return `<tr><td>${esc(fd.label)}</td><td>${html} ${fd.type !== 'date' ? `<button class="small ghost" data-plain="${esc(fd.key)}" title="Copy">⧉</button>` : ''}</td></tr>`;
@@ -143,7 +147,7 @@ views.entry = guard(async (id) => {
     <div class="tiny muted" style="margin:-4px 0 10px">${e.tags.map(SB.tagBadge).join('')} created ${fmtDate(e.created)} · edited ${fmtAgo(e.updated)}</div>
     <div class="grid2">
       <div>
-        <div class="card"><h3>Details</h3><table class="kv dtl">${fieldRows || '<tr><td class="muted">This type has no fields.</td></tr>'}</table></div>
+        <div class="card"><h3>Details${emptyCount ? ` <a class="right" id="toggleEmpty" style="cursor:pointer">${hideEmpty ? `show ${emptyCount} empty field${emptyCount === 1 ? '' : 's'}` : 'hide empty fields'}</a>` : ''}</h3><table class="kv dtl">${fieldRows || `<tr><td class="muted">${emptyCount ? 'Nothing filled in yet.' : 'This type has no fields.'}</td></tr>`}</table></div>
         ${e.creds.length ? `<div class="card"><h3>Accounts <span class="right muted">${e.creds.length}</span></h3><div class="accts">${e.creds.map(c => `<div class="acct"><div class="acct-head"><b>${esc(c.label || 'Account')}</b>${c.note ? `<span class="muted"> · ${esc(c.note)}</span>` : ''}${c.url ? ` <span class="tiny">${safeUrl(c.url) ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.url)}</a>` : esc(c.url)}</span>` : ''}</div><table class="kv dtl">
           ${c.user ? `<tr><td>User</td><td>${esc(c.user)} <button class="small ghost" data-user="${esc(c.user)}" title="Copy user name">⧉</button></td></tr>` : ''}
           <tr><td>Password</td><td>${c.set ? `<div class="srow"><span class="val mono" data-mask="${SB.MASK}">${SB.MASK}</span> <button class="small" data-reveal="cred:${c.id}">Show</button> <button class="small" data-copy="cred:${c.id}">Copy</button>${c.history.length ? ` <button class="small" data-hist="cred:${c.id}" data-label="${esc(c.label || 'Account')}">History (${c.history.length})</button>` : ''} ${pwAge(c.changed)}</div>${c.bits != null ? `<div class="pwmeter">${SB.meterHtml(c.bits)}</div>` : ''}` : '<span class="muted">none</span>'}</td></tr>
@@ -160,6 +164,7 @@ views.entry = guard(async (id) => {
   SB.wireSecrets(v, e.id);
   $$('[data-plain]', v).forEach(b => { b.onclick = () => SB.copy(e.fields[b.dataset.plain], 'Copied', false); });
   $$('[data-user]', v).forEach(b => { b.onclick = () => SB.copy(b.dataset.user, 'Copied', false); });
+  if ($('#toggleEmpty')) $('#toggleEmpty').onclick = () => { store.set('hideEmpty', hideEmpty ? '0' : '1'); UI.route(); };
   $$('[data-text]', v).forEach(b => { b.onclick = () => SB.copy(b.dataset.text, 'Copied', false); });
   if ($('#eTpl')) $('#eTpl').onclick = () => {
     const card = openModal(`<h2>Save as template</h2><div class="path">Keeps the type, tags, spec names, account names and interface names. Never a password or a secret.</div>
@@ -226,7 +231,9 @@ async function editor(mode, arg) {
     const tab = tabs.find(t => t.id === draft.tabId);
     for (const fd of tab.fields) {
       const el = $(`[data-f="${fd.key}"]`); if (!el) continue;
-      if (el.dataset.secret) { if (el.dataset.dirty) draft.secrets[fd.key] = el.value; } else draft.fields[fd.key] = el.value;
+      if (el.dataset.secret) { if (el.dataset.dirty) draft.secrets[fd.key] = el.value; }
+      else if (el.dataset.port) draft.fields[fd.key] = el.closest('.inline').querySelector('[data-caddy]').checked ? 'caddy' : el.value;
+      else draft.fields[fd.key] = el.value;
     }
     draft.creds = $$('.credrow').map(r => { const c = { id: r.dataset.id || undefined, label: $('.cl', r).value, user: $('.cu', r).value, url: $('.cr', r).value, note: $('.cn', r).value, has: r.dataset.has === '1', hasTotp: r.dataset.ht === '1' }; const sec = $('.cs', r), tp = $('.ct', r); if (sec.dataset.dirty) c.secret = sec.value; if (tp.dataset.dirty) c.totp = tp.value; return c; });
     draft.specs = $$('.specrow').map(r => ({ k: $('.sk', r).value, v: $('.sv', r).value }));
@@ -243,6 +250,7 @@ async function editor(mode, arg) {
         return `<div class="secretin">${fd.multiline ? `<textarea rows="3" ${common}>${esc(draft.secrets[fd.key] || '')}</textarea>` : `<input type="password" ${common} value="${esc(draft.secrets[fd.key] || '')}">`}
           <div class="inline">${fd.multiline ? '' : '<button type="button" class="small" data-eye>Show</button>'}${fd.type === 'password' || (fd.type === 'secret' && !fd.multiline) ? `<button type="button" class="small" data-gen="${esc(fd.gen || '')}">Generate</button>` : ''}${had && dirty ? '<button type="button" class="small" data-undo>Keep the old one</button>' : ''}<span class="meterwrap tiny"></span></div></div>`;
       }
+      if (fd.type === 'port') return `<div class="inline"><input type="number" min="1" max="65535" data-f="${esc(fd.key)}" data-port="1" value="${val === 'caddy' ? '' : esc(val)}" placeholder="e.g. 8080" ${val === 'caddy' ? 'disabled' : ''} style="width:130px"><label class="inline small"><input type="checkbox" data-caddy ${val === 'caddy' ? 'checked' : ''}> Behind Caddy: no port to show</label></div>`;
       if (fd.type === 'select') return `<select data-f="${esc(fd.key)}"><option value=""></option>${(fd.options || []).map(o => `<option ${o === val ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
       if (fd.type === 'multiline' || fd.multiline) return `<textarea rows="3" data-f="${esc(fd.key)}">${esc(val)}</textarea>`;
       return `<input type="${fd.type === 'date' ? 'date' : fd.type === 'number' ? 'number' : 'text'}" data-f="${esc(fd.key)}" value="${esc(val)}" ${fd.type === 'url' ? 'placeholder="https://"' : fd.type === 'ip' ? 'placeholder="192.168.1.20 or fe80::1"' : fd.type === 'mac' ? 'placeholder="AA:BB:CC:DD:EE:FF"' : ''} autocomplete="off" ${fd.type === 'ip' || fd.type === 'mac' ? 'spellcheck="false"' : ''}>`;
@@ -277,6 +285,7 @@ async function editor(mode, arg) {
     $('#eTab').onchange = () => { collect(); render(); };
     $('#eCancel').onclick = () => { location.hash = existing ? '#entry/' + existing.id : '#vault'; };
     const meter = (inp) => { const w = inp.closest('.secretin') && inp.closest('.secretin').querySelector('.meterwrap'); if (w && inp.type !== 'textarea' && inp.dataset.f && /password/i.test((tabs.find(t => t.id === draft.tabId).fields.find(f => f.key === inp.dataset.f) || {}).type || '')) w.innerHTML = inp.value ? SB.meterHtml(window.strengthBits(inp.value)) : ''; };
+    $$('[data-caddy]').forEach(cb => { cb.onchange = () => { const n = cb.closest('.inline').querySelector('[data-port]'); n.disabled = cb.checked; if (cb.checked) n.value = ''; }; });
     $$('[data-secret]').forEach(inp => { inp.addEventListener('input', () => { inp.dataset.dirty = '1'; meter(inp); }); });
     $$('[data-eye]').forEach(b => { b.onclick = () => { const i = b.closest('.secretin, .inline').querySelector('input'); i.type = i.type === 'password' ? 'text' : 'password'; b.textContent = i.type === 'password' ? 'Show' : 'Hide'; }; });
     $$('[data-gen]').forEach(b => { b.onclick = () => SB.generatorModal((pw) => { const i = b.closest('.secretin, .inline').querySelector('input'); i.value = pw; i.dataset.dirty = '1'; i.type = 'text'; meter(i); const eye = b.closest('.secretin, .inline').querySelector('[data-eye]'); if (eye) eye.textContent = 'Hide'; }, b.dataset.gen || null); });
@@ -303,7 +312,7 @@ views.new = guard((arg) => editor('new', arg));
 views.newt = guard((arg) => editor('tpl', arg));
 
 // ---------- tabs ---------------------------------------------------------------------------------------------
-const TYPE_LABEL = { text: 'Text', url: 'Link', multiline: 'Several lines', number: 'Number', date: 'Date', select: 'Choice', ip: 'IP address', mac: 'MAC address', password: 'Password (tracked)', secret: 'Secret (hidden)', totp: 'Authenticator seed' };
+const TYPE_LABEL = { text: 'Text', url: 'Link', multiline: 'Several lines', number: 'Number', date: 'Date', select: 'Choice', ip: 'IP address', mac: 'MAC address', port: 'Port (or behind Caddy)', password: 'Password (tracked)', secret: 'Secret (hidden)', totp: 'Authenticator seed' };
 const COLORS = ['blue', 'violet', 'pink', 'red', 'amber', 'green', 'teal', 'slate'];
 views.tabs = guard(async () => {
   const v = UI.view();

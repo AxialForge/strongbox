@@ -10,11 +10,12 @@
 //   select     one of `options`
 //   ip         an IPv4 / IPv6 address (optionally /prefix), checked on save
 //   mac        a MAC address, stored as AA:BB:CC:DD:EE:FF whatever separators were typed
+//   port       a TCP/UDP port (1-65535), or the word `caddy`: the service sits behind the reverse proxy and no port is shown
 //   password   masked, copy-only; history, age, strength and reuse are tracked
 //   secret     masked, copy-only, nothing tracked (licence keys, PINs, recovery codes); `multiline: true` allowed
 //   totp       a base32 authenticator seed; the page shows the live six-digit code
 // Password and single-line secret fields may carry `gen`: the id of the generator preset their Generate button starts from.
-const FIELD_TYPES = ['text', 'url', 'multiline', 'number', 'date', 'select', 'ip', 'mac', 'password', 'secret', 'totp'];
+const FIELD_TYPES = ['text', 'url', 'multiline', 'number', 'date', 'select', 'ip', 'mac', 'port', 'password', 'secret', 'totp'];
 const SECRET_TYPES = new Set(['password', 'secret', 'totp']);
 const TAB_COLORS = ['blue', 'violet', 'pink', 'red', 'amber', 'green', 'teal', 'slate'];
 
@@ -28,7 +29,7 @@ const DEFAULT_TABS = [
   ] },
   { builtin: 'services', name: 'Services', icon: '⚙', color: 'teal', fields: [
     f('kind', 'Kind', 'select', { options: ['Web app', 'Database', 'Container', 'Daemon / system service', 'Media server', 'Home automation', 'API', 'Other'] }),
-    f('url', 'Address', 'url'), f('port', 'Port'), f('version', 'Version'), f('user', 'Username'), f('pass', 'Password', 'password', { gen: 'strong' }),
+    f('url', 'Address', 'url'), f('port', 'Port', 'port'), f('version', 'Version'), f('user', 'Username'), f('pass', 'Password', 'password', { gen: 'strong' }),
     f('token', 'API key / token', 'secret'), f('totp', 'Authenticator seed', 'totp'), f('unit', 'Service / unit name'), f('path', 'Install path / data folder'), f('repo', 'Source / docs', 'url'),
   ] },
   { builtin: 'websites', name: 'Websites', icon: '◍', color: 'violet', fields: [
@@ -53,7 +54,7 @@ const BUILTIN_TEMPLATES = [
   { id: 'b:nas', name: 'NAS', icon: '▦', tabKey: 'hardware', tags: ['storage'], fields: { kind: 'NAS' }, specs: ['Bays', 'Capacity', 'RAID', 'Firmware'], creds: ['Web UI', 'SSH', 'Share user'], nics: ['LAN 1', 'LAN 2'] },
   { id: 'b:router', name: 'Router / firewall', icon: '▦', tabKey: 'hardware', tags: ['network'], fields: { kind: 'Router' }, specs: ['Firmware', 'Ports', 'Uplink'], creds: ['Web UI', 'SSH / console'], nics: ['LAN', 'WAN'] },
   { id: 'b:switch', name: 'Switch / access point', icon: '▦', tabKey: 'hardware', tags: ['network'], fields: { kind: 'Switch' }, specs: ['Ports', 'PoE budget', 'Firmware'], creds: ['Web UI', 'SSH / console'], nics: ['Management'] },
-  { id: 'b:service', name: 'Service / app', icon: '⚙', tabKey: 'services', tags: ['service'], fields: { kind: 'Web app' }, specs: ['Version', 'Port', 'Data folder'], creds: ['Admin', 'API'], nics: [] },
+  { id: 'b:service', name: 'Service / app', icon: '⚙', tabKey: 'services', tags: ['service'], fields: { kind: 'Web app' }, specs: ['Data folder'], creds: ['Admin', 'API'], nics: [] },
   { id: 'b:website', name: 'Website login', icon: '◍', tabKey: 'websites', tags: [], fields: {}, specs: [], creds: [], nics: [] },
   { id: 'b:key', name: 'Hardware security key', icon: '⚿', tabKey: 'keys', tags: ['2fa'], fields: { kind: 'Hardware security key' }, specs: ['Protocols'], creds: [], nics: [] },
   { id: 'b:licence', name: 'Software licence', icon: '⚿', tabKey: 'keys', tags: ['licence'], fields: { kind: 'Software licence' }, specs: ['Seats', 'Version'], creds: [], nics: [] },
@@ -112,6 +113,14 @@ function normIp(v) {
   if (addr.includes(':') && /^[0-9a-fA-F:]+$/.test(addr) && addr.length <= 39 && (addr.match(/::/g) || []).length <= 1 && (prefix === undefined || (/^\d{1,3}$/.test(prefix) && Number(prefix) <= 128))) return s.toLowerCase();
   throw new Error(`"${clip(s, 40)}" is not a valid IP address`);
 }
+/** A port number (1-65535), or `caddy` for a service behind the reverse proxy. Empty stays empty. */
+function normPort(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!s) return '';
+  if (s === 'caddy') return 'caddy';
+  if (/^\d{1,5}$/.test(s) && Number(s) >= 1 && Number(s) <= 65535) return String(Number(s));
+  throw new Error(`"${clip(s, 20)}" is not a valid port (1-65535)`);
+}
 /** A MAC address in any common notation → AA:BB:CC:DD:EE:FF. */
 function normMac(v) {
   const s = String(v == null ? '' : v).trim();
@@ -123,4 +132,4 @@ function normMac(v) {
 
 const { strengthBits } = require('../renderer/strength');
 
-module.exports = { FIELD_TYPES, SECRET_TYPES, TAB_COLORS, DEFAULT_TABS, BUILTIN_TEMPLATES, TAB_ICONS, cleanTab, cleanTemplate, normIp, normMac, strengthBits };
+module.exports = { FIELD_TYPES, SECRET_TYPES, TAB_COLORS, DEFAULT_TABS, BUILTIN_TEMPLATES, TAB_ICONS, cleanTab, cleanTemplate, normIp, normMac, normPort, strengthBits };

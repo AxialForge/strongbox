@@ -136,6 +136,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     if (fd.type === 'select') return (fd.options || []).includes(v) ? v : '';
     if (fd.type === 'ip') return T.normIp(v);
     if (fd.type === 'mac') return T.normMac(v);
+    if (fd.type === 'port') return T.normPort(v);
     return clip(v, fd.type === 'multiline' || fd.multiline ? 20000 : 500).trim();
   };
   function cleanSecret(fd, v) {
@@ -213,6 +214,9 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   const seedTabs = () => { db.transaction(() => { T.DEFAULT_TABS.forEach((t, i) => writeTab(t, null, i)); }); db.kvSet('seededTabs', T.DEFAULT_TABS.map(t => t.builtin)); };
   /** Default types added in later versions appear once in an existing vault, right after the type that precedes them in the defaults. */
   function ensureDefaultTabs() {
+    if (!db.kvGet('portFieldMigrated', false)) { // v0.5: Services > Port is a port field (it can say "behind Caddy")
+      db.transaction(() => { for (const t of tabList()) if (t.builtin === 'services' && t.fields.some(fd => fd.key === 'port' && fd.type === 'text')) writeTab({ ...t, fields: t.fields.map(fd => (fd.key === 'port' && fd.type === 'text' ? { ...fd, type: 'port' } : fd)) }, t.id); db.kvSet('portFieldMigrated', true); });
+    }
     const done = new Set(db.kvGet('seededTabs', []));
     if (T.DEFAULT_TABS.every(d => done.has(d.builtin))) return false;
     let added = false;

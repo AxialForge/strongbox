@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-01
+
+### Added
+
+- **Port** is its own field type: a number (1-65535) or **Behind Caddy**, which shows a "via Caddy" badge instead of a port and keeps the port out of the vault list. The Services type uses it (existing vaults are upgraded once). Any type can use it from the Types editor.
+- **Empty fields are hidden** on the entry page; a link in the Details card shows or hides them (remembered per browser).
+
 ## [0.4.0] - 2026-10-01
 
 ### Added

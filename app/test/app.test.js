@@ -9,6 +9,7 @@ const { buildShell } = require('../server/server');
 const { parseKeyFile } = require('../main/vault');
 const { strengthBits } = require('../main/templates');
 const { parseCsv } = require('../main/csvin');
+const T_DEFAULT_SERVICES = () => require('../main/templates').DEFAULT_TABS.find(t => t.builtin === 'services');
 
 const rootDir = path.join(__dirname, '..', '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-app-'));
@@ -180,6 +181,13 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.deepStrictEqual(H('entries:search', 'full access'), [multi.id], 'account notes are searchable');
   assert.ok(H('vault:health').weak.concat(H('vault:health').reused).every(x => x.id !== multi.id) || true);
   assert.strictEqual(H('entries:save', { id: multi.id, tabId: hw.id, title: 'Firewall', creds: [keep.creds[1]].map(c => ({ id: c.id, label: c.label, user: c.user })) }).creds.length, 1, 'accounts can be removed');
+
+  // ports: a number, or "caddy" for a service behind the reverse proxy; the Services type's old text Port becomes a port field
+  const st2 = H('tabs:list').find(t => t.builtin === 'services') || H('tabs:save', T_DEFAULT_SERVICES());
+  const px = H('entries:save', { tabId: st2.id, title: 'Behind proxy', fields: { port: 'Caddy' } }); assert.strictEqual(px.fields.port, 'caddy');
+  assert.strictEqual(H('entries:save', { id: px.id, tabId: st2.id, title: 'Behind proxy', fields: { port: ' 08080 ' } }).fields.port, '8080');
+  for (const bad of ['0', '70000', 'abc', '80.5']) await fails(Promise.resolve().then(() => H('entries:save', { id: px.id, tabId: st2.id, title: 'x', fields: { port: bad } })), /valid port/);
+  assert.strictEqual(H('entries:save', { id: px.id, tabId: st2.id, title: 'Behind proxy', fields: { port: '' } }).fields.port, undefined, 'an empty port is simply not shown');
 
   // ---- lock, wrong factors, throttle, unlock, recovery ----------------------------------------
   H('vault:lock');

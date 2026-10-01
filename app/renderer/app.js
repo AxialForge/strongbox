@@ -285,7 +285,7 @@ async function editor(mode, arg) {
     $('#eTab').onchange = () => { collect(); render(); };
     $('#eCancel').onclick = () => { location.hash = existing ? '#entry/' + existing.id : '#vault'; };
     const meter = (inp) => { const w = inp.closest('.secretin') && inp.closest('.secretin').querySelector('.meterwrap'); if (w && inp.type !== 'textarea' && inp.dataset.f && /password/i.test((tabs.find(t => t.id === draft.tabId).fields.find(f => f.key === inp.dataset.f) || {}).type || '')) w.innerHTML = inp.value ? SB.meterHtml(window.strengthBits(inp.value)) : ''; };
-    $$('[data-caddy]').forEach(cb => { cb.onchange = () => { const n = cb.closest('.inline').querySelector('[data-port]'); n.disabled = cb.checked; if (cb.checked) n.value = ''; }; });
+    $$('[data-caddy]').forEach(cb => { cb.onchange = () => { const n = cb.closest('.field').querySelector('[data-port]'); n.disabled = cb.checked; if (cb.checked) n.value = ''; }; });
     $$('[data-secret]').forEach(inp => { inp.addEventListener('input', () => { inp.dataset.dirty = '1'; meter(inp); }); });
     $$('[data-eye]').forEach(b => { b.onclick = () => { const i = b.closest('.secretin, .inline').querySelector('input'); i.type = i.type === 'password' ? 'text' : 'password'; b.textContent = i.type === 'password' ? 'Show' : 'Hide'; }; });
     $$('[data-gen]').forEach(b => { b.onclick = () => SB.generatorModal((pw) => { const i = b.closest('.secretin, .inline').querySelector('input'); i.value = pw; i.dataset.dirty = '1'; i.type = 'text'; meter(i); const eye = b.closest('.secretin, .inline').querySelector('[data-eye]'); if (eye) eye.textContent = 'Hide'; }, b.dataset.gen || null); });

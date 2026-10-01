@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-01
+
+### Fixed
+
+- The "Behind Caddy" checkbox next to a port now enables and disables the port box as it should (it did nothing on 0.5.0).
+
 ## [0.5.0] - 2026-10-01
 
 ### Added

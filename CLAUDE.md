@@ -46,7 +46,7 @@ app/main/templates.js    field types, the four default tabs, cleanTab(), strengt
 app/main/service.js      createService: schema, every handler (via api(channel, fn(actor, ...args))), health, audit, jobs
 app/main/csvin.js        CSV reader + header mapping for password-manager exports
 app/server/server.js     roles, SENSITIVE list, and the wrapper that passes { user, ip } to every vault handler for the audit trail
-app/renderer/            strength.js (shared with the server), util.js (clipboard, generator, reveal), lock.js (setup wizard,
+app/renderer/            strength.js (shared with the server), util.js (clipboard, the generator engine and its presets, tag badges, reveal), lock.js (setup wizard,
                          unlock screen, sidebar lock box), app.js (all pages), bridge-shape.js (the API contract), app.css
 ```
 
@@ -55,16 +55,25 @@ app/renderer/            strength.js (shared with the server), util.js (clipboar
 - `vault_meta(k, v)`: one row, `header` = `{ v, mode, kdf, kf (key file id), dk (wrapped data key), rk (wrapped under the recovery key) }`.
   A copy of the database is a complete, still-encrypted backup.
 - `tabs(id, sort, blob)`: blob = `{ name, icon, fields: [{ key, label, type, options?, expiry?, multiline? }], builtin? }`.
-- `entries(id, tab_id, parent_id, created, updated, deleted, blob)`: blob = `{ title, subtitle, fields{key: value}, creds[{id, label, user, url, secret}], specs[{k, v}], notes, tags, favorite, changed{key: ms}, hist{key: [{v, t}]} }`.
+- `entries(id, tab_id, parent_id, created, updated, deleted, blob)`: blob = `{ title, subtitle, fields{key: value}, creds[{id, label, user, url, secret}], specs[{k, v}], nics[{label, ip, mac}], notes, tags, favorite, changed{key: ms}, hist{key: [{v, t}]} }`.
   Every blob is `[1][nonce 12][ciphertext][tag 16]`, AES-256-GCM under a subkey of the data key, with `tab/<id>` or `entry/<id>` as additional data so a ciphertext cannot be moved to another row (tested).
+- `prefs(k, blob)`: small encrypted records (`pref/<k>` is the additional data): `tags` = `{ name: { color } }`, `templates` = custom entry templates.
+  Built-in templates live in `templates.js` (`BUILTIN_TEMPLATES`); a template never holds a secret (`templates:save` with `fromEntry` strips them).
 - `vault_audit(ts, action, entry_id, detail, actor, ip)`: who unlocked, revealed, exported, changed. Never a secret or a title.
 - Soft delete: `deleted` = timestamp on the entry and its subtree; Trash restores the subtree; the `trash` daily job purges after `vault.trashDays`.
 
 ### Field types (templates.js)
 
-`text url multiline number date select password secret totp`. `password` is tracked (age, history of the last 5, strength, reuse);
+`text url multiline number date select ip mac password secret totp`. `ip` and `mac` are validated on save (`normIp`, `normMac`; MACs are stored as `AA:BB:CC:DD:EE:FF`). `password` is tracked (age, history of the last 5, strength, reuse);
 `secret` is masked with nothing tracked; `totp` shows a live code (server-side, `entries:totp`); a `date` with `expiry: true` feeds the expiring list.
 Entries keep values by field key, so a template can change freely; values of removed fields stay in the blob.
+
+### Generator, tags, templates, network
+
+- The generator is browser-only (`util.js`: `generate()` + `generatorPanel()`, tested by `app/test/generator.test.js`): presets plus requirements (length, minimum upper/digits/symbols, allowed symbol set, excluded characters, start with a letter, passphrase / PIN / hex modes). It never repeats a character three times in a row and raises the length when the minimums need it. Custom presets are saved in `settings.vault.genPresets`; a password field's `gen` is the preset its Generate button starts from.
+- Tags are free text on entries; colours and renames live in `prefs.tags`. Renaming or merging re-seals every entry that carries the tag (`mutateEntries`).
+- `#newt/<templateId>[/<parentId>]` opens the editor pre-filled from a template (ids: `b:*` built in, `c:*` custom).
+- `network:list` flattens every ip/mac field and every `nics` row into one table; the page flags duplicate IPs and MACs.
 
 ### Adding a channel
 

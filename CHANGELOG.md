@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-01
+
+### Added
+
+- Password generator with presets (strong, very long, letters and digits, router / device, Wi-Fi key, passphrase, PINs, hex key) and requirements: length, minimum upper-case / digits / symbols, the symbols a device accepts, characters never to use, start with a letter. Your own presets can be saved; each password field can start from a preset. Also a Generator page.
+- IP address and MAC address field types with validation and normalisation; extra network interfaces (name, IP, MAC) on any entry; a Network page listing every address with duplicate detection.
+- Entry templates: built-ins (server, VM, NAS, router, switch / AP, website, security key, licence), "Save as template" from any entry, a Templates page and "New entry from template".
+- Coloured tags with a Tags page (colour, rename, merge, remove) and tag filters in the vault list; colour for each tab.
+- A more modern look: depth, gradients, rounded cards, coloured icon bubbles, motion; all themes still work.
+
+### Changed
+
+- The Hardware tab now has separate Hostname, IP address and MAC address fields.
+
 ## [0.1.0] - 2026-10-01
 
 ### Added

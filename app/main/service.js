@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 CREATE INDEX IF NOT EXISTS entries_parent ON entries(parent_id);
 CREATE INDEX IF NOT EXISTS entries_tab ON entries(tab_id);
+CREATE TABLE IF NOT EXISTS prefs (
+  k     TEXT PRIMARY KEY,
+  blob  BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS vault_audit (
   id        INTEGER PRIMARY KEY,
   ts        INTEGER NOT NULL,
@@ -49,7 +53,7 @@ CREATE TABLE IF NOT EXISTS vault_audit (
 const MIGRATIONS = [];
 
 const DEFAULTS = {
-  vault: { autoLockMinutes: 15, clipboardClearSeconds: 30, revealSeconds: 20, staleDays: 365, weakBits: 50, expiringDays: 60, trashDays: 30, kdfLog2N: 17 },
+  vault: { autoLockMinutes: 15, clipboardClearSeconds: 30, revealSeconds: 20, staleDays: 365, weakBits: 50, expiringDays: 60, trashDays: 30, kdfLog2N: 17, genPresets: [] },
   backup: { time: '03:30' },
   notify: { events: { unlockFailed: true, dailySummary: false } },
 };
@@ -79,7 +83,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   const tabMap = () => new Map(tabList().map(t => [t.id, t]));
   const rowOf = (id) => db.get('SELECT * FROM entries WHERE id=?', Number(id));
   const openEntry = (r) => vault.open(r.blob, `entry/${r.id}`);
-  const blank = () => ({ title: '', subtitle: '', fields: {}, creds: [], specs: [], notes: '', tags: [], favorite: false, changed: {}, hist: {} });
+  const blank = () => ({ title: '', subtitle: '', fields: {}, creds: [], specs: [], nics: [], notes: '', tags: [], favorite: false, changed: {}, hist: {} });
   /** Everything not in the trash, decrypted: [{ row, e }]. */
   const everything = (trash = false) => db.all(`SELECT * FROM entries WHERE deleted IS ${trash ? 'NOT ' : ''}NULL ORDER BY id`).map(row => ({ row, e: { ...blank(), ...openEntry(row) } }));
   const tabOfRow = (row, tabs) => tabs.get(row.tab_id) || { id: row.tab_id, name: '(missing tab)', icon: '?', fields: [] };
@@ -109,7 +113,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     return {
       ...light(row, e, tab), deleted: row.deleted || null, fields: plainFields(e, tab, true), secrets, path,
       creds: e.creds.map(c => ({ id: c.id, label: c.label, user: c.user, url: c.url, set: !!c.secret, changed: e.changed['cred:' + c.id] || null, bits: c.secret ? T.strengthBits(c.secret) : undefined, history: (e.hist['cred:' + c.id] || []).map(h => ({ t: h.t })) })),
-      specs: e.specs, notes: e.notes,
+      specs: e.specs, nics: e.nics, notes: e.notes,
     };
   }
   const present = (id) => { const row = rowOf(id); if (!row) throw new Error('No such entry'); const tabs = tabMap(); return full(row, { ...blank(), ...openEntry(row) }, tabOfRow(row, tabs)); };
@@ -130,6 +134,8 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   const cleanValue = (fd, v) => {
     if (fd.type === 'date') return /^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? String(v) : '';
     if (fd.type === 'select') return (fd.options || []).includes(v) ? v : '';
+    if (fd.type === 'ip') return T.normIp(v);
+    if (fd.type === 'mac') return T.normMac(v);
     return clip(v, fd.type === 'multiline' || fd.multiline ? 20000 : 500).trim();
   };
   function cleanSecret(fd, v) {
@@ -163,6 +169,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     const e = { ...prev, title, subtitle: clip(input.subtitle, 200).trim(), fields: { ...prev.fields }, notes: clip(input.notes, 100000), favorite: !!input.favorite, changed: { ...prev.changed }, hist: structuredClone(prev.hist), creds: [] };
     e.tags = [...new Set((Array.isArray(input.tags) ? input.tags : []).map(t => clip(t, 40).trim().toLowerCase()).filter(Boolean))].slice(0, 30);
     e.specs = (Array.isArray(input.specs) ? input.specs : []).map(s => ({ k: clip(s.k, 60).trim(), v: clip(s.v, 300).trim() })).filter(s => s.k || s.v).slice(0, 100);
+    e.nics = (Array.isArray(input.nics) ? input.nics : []).map(n => ({ label: clip(n.label, 60).trim(), ip: T.normIp(n.ip), mac: T.normMac(n.mac) })).filter(n => n.label || n.ip || n.mac).slice(0, 30);
     for (const fd of tab.fields) {
       if (T.SECRET_TYPES.has(fd.type)) {
         if (input.secrets && typeof input.secrets[fd.key] === 'string') {
@@ -235,7 +242,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     const tabs = tabMap();
     return everything().filter(({ row, e }) => {
       const tab = tabOfRow(row, tabs);
-      const hay = [e.title, e.subtitle, e.tags.join(' '), e.notes, e.specs.map(s => `${s.k} ${s.v}`).join(' '), e.creds.map(c => `${c.label} ${c.user} ${c.url}`).join(' '), tab.name, ...tab.fields.filter(fd => !T.SECRET_TYPES.has(fd.type)).map(fd => e.fields[fd.key] || '')].join('\n').toLowerCase();
+      const hay = [e.title, e.subtitle, e.tags.join(' '), e.notes, e.specs.map(s => `${s.k} ${s.v}`).join(' '), e.creds.map(c => `${c.label} ${c.user} ${c.url}`).join(' '), e.nics.map(n => `${n.label} ${n.ip} ${n.mac}`).join(' '), tab.name, ...tab.fields.filter(fd => !T.SECRET_TYPES.has(fd.type)).map(fd => e.fields[fd.key] || '')].join('\n').toLowerCase();
       return words.every(w => hay.includes(w));
     }).map(({ row }) => row.id);
   });
@@ -331,6 +338,83 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     return { added, skipped, mapped: Object.fromEntries(Object.entries(target).filter(([, v]) => v).map(([k, v]) => [k, v.label])) };
   });
 
+  // ---- tags, entry templates, network overview (small encrypted preferences) ----------------------
+  const getPref = (k, dflt) => { const r = db.get('SELECT blob FROM prefs WHERE k=?', k); return r ? vault.open(r.blob, `pref/${k}`) : dflt; };
+  const setPref = (k, v) => db.run('INSERT INTO prefs(k, blob) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET blob=excluded.blob', k, vault.seal(v, `pref/${k}`));
+  /** Re-seals every entry (trash included) that `fn(e)` changed in place; returns how many. */
+  function mutateEntries(fn) {
+    let n = 0;
+    db.transaction(() => { for (const { row, e } of everything().concat(everything(true))) if (fn(e)) { db.run('UPDATE entries SET blob=? WHERE id=?', vault.seal(e, `entry/${row.id}`), row.id); n++; } });
+    return n;
+  }
+  const listTags = () => {
+    const reg = getPref('tags', {}), counts = new Map();
+    for (const { e } of everything()) for (const t of e.tags) counts.set(t, (counts.get(t) || 0) + 1);
+    return [...new Set([...Object.keys(reg), ...counts.keys()])].sort().map(name => ({ name, color: (reg[name] && reg[name].color) || '', count: counts.get(name) || 0 }));
+  };
+  api('tags:list', () => listTags());
+  api('tags:save', (a, t = {}) => {
+    const name = clip(t.name, 40).trim().toLowerCase(), to = clip(t.newName, 40).trim().toLowerCase();
+    if (!name) throw new Error('A tag needs a name');
+    const reg = getPref('tags', {});
+    let target = name;
+    if (to && to !== name) { // rename, or merge into an existing tag
+      target = to;
+      mutateEntries(e => { if (!e.tags.includes(name)) return false; e.tags = [...new Set(e.tags.map(x => (x === name ? to : x)))]; return true; });
+      delete reg[name];
+    }
+    reg[target] = { color: T.TAB_COLORS.includes(t.color) ? t.color : '' };
+    setPref('tags', reg); audit(a, 'tag_saved'); changed();
+    return listTags();
+  });
+  api('tags:delete', (a, name) => {
+    name = clip(name, 40).trim().toLowerCase();
+    const reg = getPref('tags', {}); delete reg[name]; setPref('tags', reg);
+    mutateEntries(e => { if (!e.tags.includes(name)) return false; e.tags = e.tags.filter(x => x !== name); return true; });
+    audit(a, 'tag_deleted'); changed();
+    return listTags();
+  });
+
+  const builtinTemplates = (tabs) => T.BUILTIN_TEMPLATES.map(b => {
+    const all = [...tabs.values()], tab = all.find(t => t.builtin === b.tabKey) || all[0];
+    return { id: b.id, builtin: true, name: b.name, icon: b.icon, tabId: tab ? tab.id : null, subtitle: '', tags: b.tags, fields: b.fields, specs: b.specs.map(k => ({ k, v: '' })), creds: b.creds.map(label => ({ label, user: '', url: '' })), nics: b.nics.map(label => ({ label })) };
+  });
+  const listTemplates = () => { const tabs = tabMap(); return [...getPref('templates', []).map(t => ({ ...t, builtin: false })), ...builtinTemplates(tabs)]; };
+  api('templates:list', () => listTemplates());
+  api('templates:save', (a, t = {}) => {
+    let body = t;
+    if (t.fromEntry) { // a blueprint from an existing entry: structure always, values only when asked
+      const row = rowOf(t.fromEntry); if (!row) throw new Error('No such entry');
+      const e = { ...blank(), ...openEntry(row) }, tab = tabOfRow(row, tabMap()), keep = !!t.keepValues;
+      const plain = plainFields(e, tab, true), fields = {};
+      for (const fd of tab.fields) if (plain[fd.key] !== undefined && (keep || fd.type === 'select')) fields[fd.key] = plain[fd.key];
+      body = { name: t.name, icon: tab.icon, tabId: row.tab_id, subtitle: keep ? e.subtitle : '', tags: e.tags, fields, specs: e.specs.map(s => ({ k: s.k, v: keep ? s.v : '' })), creds: e.creds.map(c => ({ label: c.label, user: keep ? c.user : '', url: keep ? c.url : '' })), nics: e.nics.map(n => ({ label: n.label })) };
+    }
+    const clean = T.cleanTemplate(body);
+    if (clean.tabId && !tabMap().has(clean.tabId)) clean.tabId = null;
+    const list = getPref('templates', []);
+    const at = t.id && String(t.id).startsWith('c:') ? list.findIndex(x => x.id === t.id) : -1;
+    if (at >= 0) list[at] = { id: t.id, ...clean }; else list.push({ id: 'c:' + crypto.randomBytes(5).toString('hex'), ...clean });
+    setPref('templates', list); audit(a, 'template_saved');
+    return listTemplates();
+  });
+  api('templates:delete', (a, id) => { setPref('templates', getPref('templates', []).filter(x => x.id !== id)); audit(a, 'template_deleted'); return listTemplates(); });
+
+  // Every IP and MAC address in the vault in one table (IP / MAC fields and the extra network interfaces).
+  api('network:list', () => {
+    const tabs = tabMap(), rows = [];
+    for (const { row, e } of everything()) {
+      const tab = tabOfRow(row, tabs), base = { id: row.id, title: e.title, tabId: row.tab_id, tab: tab.name };
+      const ips = tab.fields.filter(fd => fd.type === 'ip'), macs = tab.fields.filter(fd => fd.type === 'mac');
+      for (let i = 0; i < Math.max(ips.length, macs.length); i++) {
+        const ip = ips[i] ? e.fields[ips[i].key] || '' : '', mac = macs[i] ? e.fields[macs[i].key] || '' : '';
+        if (ip || mac) rows.push({ ...base, label: (ips[i] || macs[i]).label, ip, mac });
+      }
+      for (const n of e.nics) if (n.ip || n.mac) rows.push({ ...base, label: n.label || 'Interface', ip: n.ip, mac: n.mac });
+    }
+    return rows;
+  });
+
   // ---- health, dashboard, audit ------------------------------------------------------------
   function health() {
     const c = cfg(), now = Date.now(), tabs = tabMap(), staleMs = (Number(c.staleDays) || 0) * DAY;
@@ -409,7 +493,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   api('vault:newRecovery', async (a) => { const r = await vault.newRecovery(); audit(a, 'recovery_key_renewed'); return r; }, { data: false });
   api('vault:resetEmpty', (a) => {
     if (db.get('SELECT COUNT(*) n FROM entries').n) throw new Error('The vault holds entries; a reset would destroy them. Restore from a backup instead.');
-    db.transaction(() => { db.run('DELETE FROM tabs'); db.run('DELETE FROM vault_meta'); });
+    db.transaction(() => { db.run('DELETE FROM tabs'); db.run('DELETE FROM prefs'); db.run('DELETE FROM vault_meta'); });
     vault.lock('reset'); audit(a, 'vault_reset'); changed();
     return true;
   }, { data: false });

@@ -13,7 +13,7 @@ const app = require('../app.json');
 // Standard accounts can open the vault and read (reveal included, which is audited), never change it.
 const ROLES = {
   GUEST: [],
-  STANDARD: ['vault:status', 'vault:touch', 'vault:unlock', 'vault:lock', 'vault:health', 'data:dashboard', 'tabs:list', 'entries:list', 'entries:search', 'entries:get', 'entries:reveal', 'entries:totp'],
+  STANDARD: ['vault:status', 'vault:touch', 'vault:unlock', 'vault:lock', 'vault:health', 'data:dashboard', 'tabs:list', 'entries:list', 'entries:search', 'entries:get', 'entries:reveal', 'entries:totp', 'tags:list', 'templates:list', 'network:list'],
   // Ask for the account password again (within 5 minutes) before these.
   SENSITIVE: ['vault:create', 'vault:rewrap', 'vault:newRecovery', 'vault:resetEmpty', 'vault:backup', 'entries:purge', 'tabs:delete'],
 };

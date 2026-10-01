@@ -121,6 +121,40 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   H('tabs:delete', wifi.id, web.id);
   assert.strictEqual(H('entries:get', w.id).tabId, web.id);
 
+  // ---- IP and MAC addresses, interfaces, the network table ---------------------------------------------------
+  const sw = H('entries:save', { tabId: hw.id, title: 'Core switch', fields: { ip: '192.168.1.2', mac: 'aa-bb-cc-dd-ee-ff', host: 'sw1' }, nics: [{ label: 'mgmt', ip: '10.0.0.2/24', mac: '001122334455' }, { label: 'empty' }, {}] });
+  assert.strictEqual(sw.fields.mac, 'AA:BB:CC:DD:EE:FF'); assert.strictEqual(sw.nics.length, 2); assert.strictEqual(sw.nics[0].mac, '00:11:22:33:44:55');
+  for (const bad of [{ ip: '300.1.1.1' }, { ip: 'not an ip' }, { mac: 'ZZ:11' }, { mac: '1234' }]) await fails(Promise.resolve().then(() => H('entries:save', { id: sw.id, tabId: hw.id, title: 'Core switch', fields: bad })), /valid (IP|MAC)/);
+  assert.strictEqual(H('entries:save', { id: sw.id, tabId: hw.id, title: 'Core switch', fields: { ip: 'FE80::1' }, nics: sw.nics }).fields.ip, 'fe80::1');
+  const net = H('network:list').filter(r => r.id === sw.id);
+  assert.deepStrictEqual(net.map(r => [r.label, r.ip, r.mac]), [['IP address', 'fe80::1', 'AA:BB:CC:DD:EE:FF'], ['mgmt', '10.0.0.2/24', '00:11:22:33:44:55']]);
+  assert.deepStrictEqual(H('entries:search', '00:11:22'), [sw.id], 'interfaces are searchable');
+
+  // ---- tags: colours, rename, merge, delete -----------------------------------------------------------------
+  H('entries:save', { id: sw.id, tabId: hw.id, title: 'Core switch', tags: ['Network', 'prod'] });
+  assert.ok(H('tags:list').some(t => t.name === 'network' && t.count >= 1));
+  H('tags:save', { name: 'network', color: 'teal' });
+  assert.strictEqual(H('tags:list').find(t => t.name === 'network').color, 'teal');
+  H('tags:save', { name: 'network', newName: 'net', color: 'teal' });
+  assert.deepStrictEqual(H('entries:get', sw.id).tags.sort(), ['net', 'prod']);
+  H('tags:save', { name: 'prod', newName: 'net' }); // merge
+  assert.deepStrictEqual(H('entries:get', sw.id).tags, ['net']);
+  H('tags:delete', 'net');
+  assert.deepStrictEqual(H('entries:get', sw.id).tags, []); assert.ok(!H('tags:list').some(t => t.name === 'net'));
+
+  // ---- entry templates -----------------------------------------------------------------------------------------
+  const tl = H('templates:list');
+  assert.ok(tl.some(t => t.id === 'b:server' && t.builtin && t.tabId === hw.id && t.creds.length === 3 && t.nics.length === 2));
+  const mine = H('templates:save', { fromEntry: server.id, name: 'My NAS' }).find(t => t.name === 'My NAS');
+  assert.strictEqual(mine.fields.kind, 'NAS'); assert.ok(!('host' in mine.fields), 'values dropped unless asked');
+  assert.deepStrictEqual(mine.specs.map(s => s.v), mine.specs.map(() => '')); assert.ok(mine.specs.length >= 1);
+  assert.ok(!JSON.stringify(mine).includes('a-new-password-99'), 'a template never holds a secret');
+  const kept = H('templates:save', { fromEntry: server.id, name: 'NAS with values', keepValues: true }).find(t => t.name === 'NAS with values');
+  assert.strictEqual(kept.fields.host, '192.168.1.51');
+  assert.strictEqual(H('templates:save', { id: mine.id, name: 'Renamed', tags: ['x'], tabId: hw.id }).find(t => t.id === mine.id).name, 'Renamed');
+  assert.ok(!H('templates:delete', mine.id).some(t => t.id === mine.id));
+  H('templates:delete', 'b:server'); assert.ok(H('templates:list').some(t => t.id === 'b:server'), 'built-ins stay');
+
   // ---- lock, wrong factors, throttle, unlock, recovery ----------------------------------------
   H('vault:lock');
   assert.strictEqual(H('vault:status').state, 'locked');

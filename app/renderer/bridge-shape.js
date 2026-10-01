@@ -28,6 +28,9 @@
     resetEmpty: 'vault:resetEmpty', backup: 'vault:backup', health: 'vault:health', audit: 'vault:audit',
     onLocked: '!vault:locked', onChanged: '!vault:changed',
   },
+  tags: { list: 'tags:list', save: 'tags:save', delete: 'tags:delete' },
+  templates: { list: 'templates:list', save: 'templates:save', delete: 'templates:delete' },
+  network: { list: 'network:list' },
   tabs: { list: 'tabs:list', save: 'tabs:save', reorder: 'tabs:reorder', delete: 'tabs:delete' },
   entries: {
     list: 'entries:list', search: 'entries:search', get: 'entries:get', save: 'entries:save', move: 'entries:move', reveal: 'entries:reveal', totp: 'entries:totp',

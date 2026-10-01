@@ -199,6 +199,29 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.strictEqual(H('entries:print', [server.id], { notes: false }).docs[0].notes, '');
   assert.ok(H('vault:audit', 20).some(r => r.action === 'print' && /with secrets/.test(r.detail || '')));
 
+  // CSV in: formats, preview, duplicates, folders as tags; CSV out in the browser format; duplicate an entry
+  const wt = H('tabs:list').find(t => t.builtin === 'websites');
+  const google = 'name,url,username,password,note\nExample,https://www.example.com/login,ann,ex-pass-1111,hello\nGitHub,https://github.com,joe,gh-pass-123456,\n';
+  const dry = H('entries:importCsv', wt.id, google, { dryRun: true });
+  assert.strictEqual(dry.format, 'Google Password Manager / Chrome / Edge'); assert.strictEqual(dry.willAdd, 1, 'GitHub / joe already exists'); assert.strictEqual(dry.duplicates, 1); assert.ok(dry.dryRun && !JSON.stringify(dry).includes('ex-pass-1111'), 'a preview never echoes passwords');
+  assert.strictEqual(H('entries:search', 'example.com').length, 0, 'a preview writes nothing');
+  assert.strictEqual(H('entries:importCsv', wt.id, google).added, 1);
+  assert.strictEqual(H('entries:importCsv', wt.id, google).added, 0, 'importing the same file again adds nothing');
+  assert.strictEqual(H('entries:importCsv', wt.id, google, { skipDuplicates: false }).added, 2);
+  const bw = 'folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\nWork,,login,Jira,,,0,https://jira.example.org,kim,jira-pass-9999,\n,,note,A secure note,secret words,,0,,,,\n,,card,Visa,,,0,,,,\n';
+  const bwDry = H('entries:importCsv', wt.id, bw, { dryRun: true }); assert.strictEqual(bwDry.format, 'Bitwarden'); assert.strictEqual(bwDry.willAdd, 1); assert.strictEqual(bwDry.otherKinds, 2);
+  H('entries:importCsv', wt.id, bw); const jira = H('entries:search', 'jira'); assert.deepStrictEqual(H('entries:get', jira[0]).tags, ['work'], 'a folder becomes a tag');
+  const ff = 'url,username,password,httpRealm,formActionOrigin,guid,timeCreated\nhttps://forum.example.net,zed,ff-pass-7777,,,{1},1\n';
+  assert.strictEqual(H('entries:importCsv', wt.id, ff, { dryRun: true }).format, 'Firefox'); H('entries:importCsv', wt.id, ff); assert.strictEqual(H('entries:get', H('entries:search', 'forum.example.net')[0]).title, 'forum.example.net');
+  const ex = H('entries:exportCsv', wt.id);
+  assert.ok(ex.text.startsWith('name,url,username,password,note\r\n') && !ex.text.startsWith('\uFEFF'), 'browser header, no BOM');
+  assert.ok(ex.text.includes('Jira,https://jira.example.org,kim,jira-pass-9999') && ex.rows >= 5);
+  const exMulti = H('entries:save', { tabId: wt.id, title: 'Router UI', fields: { url: 'http://router.home' }, secrets: { pass: 'main-pass-12345' }, creds: [{ label: 'guest', user: 'guest', secret: 'guest-pass-6789' }] });
+  const ex2 = H('entries:exportCsv', wt.id).text; assert.ok(ex2.includes('Router UI,http://router.home,,main-pass-12345') && ex2.includes('Router UI (guest),http://router.home,guest,guest-pass-6789'), 'each account is its own row');
+  assert.ok(H('vault:audit', 40).some(r => r.action === 'csv_export'));
+  const dup = H('entries:duplicate', exMulti.id); assert.strictEqual(dup.title, 'Copy of Router UI'); assert.strictEqual(dup.secrets.pass.set, false); assert.strictEqual(dup.creds.length, 1); assert.strictEqual(dup.creds[0].set, false); assert.notStrictEqual(dup.creds[0].id, H('entries:get', exMulti.id).creds[0].id);
+  const dup2 = H('entries:duplicate', exMulti.id, { secrets: true }); assert.strictEqual(H('entries:reveal', dup2.id, 'field:pass'), 'main-pass-12345'); assert.strictEqual(H('entries:reveal', dup2.id, 'cred:' + dup2.creds[0].id), 'guest-pass-6789');
+
   // ---- lock, wrong factors, throttle, unlock, recovery ----------------------------------------
   H('vault:lock');
   assert.strictEqual(H('vault:status').state, 'locked');

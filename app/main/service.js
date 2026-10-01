@@ -13,7 +13,8 @@ const { totp, base32Decode } = require('../../kit/server/totp');
 const meta = require('../app.json');
 const { Vault } = require('./vault');
 const T = require('./templates');
-const { parseCsv, mapHeaders } = require('./csvin');
+const { parseCsv, mapHeaders, detectFormat } = require('./csvin');
+const { csv } = require('../../kit/main/csv');
 
 const DAY = 86400000;
 const LOCKED = 'The vault is locked';
@@ -362,8 +363,9 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     const n = purge(list); audit(a, 'entries_purged', null, `${n} item(s)`); changed();
     return n;
   });
-  api('entries:importCsv', (a, tabId, text) => {
-    const tab = tabMap().get(Number(tabId)); if (!tab) throw new Error('Choose a type to import into');
+  // CSV in: one planning pass (format, mapping, duplicates), then either a preview or the writes.
+  const hostOf = (u) => String(u || '').toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').replace(/[/?#].*$/, '');
+  function planImport(tab, text, skipDuplicates) {
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error('The file has no rows');
     if (rows.length > 5001) throw new Error('At most 5000 rows per import');
@@ -374,22 +376,61 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       url: find(fd => fd.type === 'url'), user: find(fd => fd.key === 'user') || find(fd => /user|login|address/i.test(fd.label) && fd.type === 'text'),
       pass: find(fd => fd.type === 'password'), totp: find(fd => fd.type === 'totp'),
     };
-    let added = 0, skipped = 0;
-    db.transaction(() => {
-      for (const r of rows.slice(1)) {
-        const val = (k) => (h[k] === undefined ? '' : String(r[h[k]] || '').trim());
-        let title = val('title') || val('url').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-        if (!title) { skipped++; continue; }
-        const input = { title, tabId: tab.id, notes: val('notes'), fields: {}, secrets: {} };
-        if (target.url && val('url')) input.fields[target.url.key] = val('url');
-        if (target.user && val('user')) input.fields[target.user.key] = val('user');
-        if (target.pass && val('pass')) input.secrets[target.pass.key] = val('pass');
-        if (target.totp && val('totp')) { try { input.secrets[target.totp.key] = cleanSecret(target.totp, val('totp')); } catch { /* skip an unreadable seed */ } }
-        saveEntry(a, input, { audited: false, inTx: true }); added++;
-      }
-    });
-    audit(a, 'csv_import', null, `${added} added, ${skipped} skipped`); changed();
-    return { added, skipped, mapped: Object.fromEntries(Object.entries(target).filter(([, v]) => v).map(([k, v]) => [k, v.label])) };
+    const sig = (title, url, user) => (hostOf(url) || String(title).toLowerCase()) + '|' + String(user || '').toLowerCase();
+    const have = new Set(everything().filter(x => x.row.tab_id === tab.id).map(({ e }) => sig(e.title, target.url && e.fields[target.url.key], target.user && e.fields[target.user.key])));
+    const out = { format: detectFormat(rows[0]), total: rows.length - 1, items: [], duplicates: 0, noName: 0, otherKinds: 0, mapped: Object.fromEntries(Object.entries(target).filter(([, v]) => v).map(([k, v]) => [k, v.label])), sample: [] };
+    for (const r of rows.slice(1)) {
+      const val = (k) => (h[k] === undefined ? '' : String(r[h[k]] || '').trim());
+      if (h.kind !== undefined && val('kind') && val('kind').toLowerCase() !== 'login') { out.otherKinds++; continue; } // Bitwarden notes, cards, identities
+      const title = val('title') || hostOf(val('url'));
+      if (!title) { out.noName++; continue; }
+      const s = sig(title, val('url'), val('user'));
+      if (skipDuplicates && have.has(s)) { out.duplicates++; continue; }
+      have.add(s);
+      const input = { title, tabId: tab.id, notes: val('notes'), fields: {}, secrets: {}, tags: val('folder') ? [val('folder')] : [] };
+      if (target.url && val('url')) input.fields[target.url.key] = val('url');
+      if (target.user && val('user')) input.fields[target.user.key] = val('user');
+      if (target.pass && val('pass')) input.secrets[target.pass.key] = val('pass');
+      if (target.totp && val('totp')) { try { input.secrets[target.totp.key] = cleanSecret(target.totp, val('totp')); } catch { /* skip an unreadable seed */ } }
+      out.items.push(input);
+      if (out.sample.length < 6) out.sample.push({ title, url: val('url'), user: val('user'), password: !!val('pass') });
+    }
+    return out;
+  }
+  api('entries:importCsv', (a, tabId, text, opts = {}) => {
+    const tab = tabMap().get(Number(tabId)); if (!tab) throw new Error('Choose a type to import into');
+    const p = planImport(tab, text, opts.skipDuplicates !== false);
+    const summary = { format: p.format, total: p.total, willAdd: p.items.length, duplicates: p.duplicates, noName: p.noName, otherKinds: p.otherKinds, mapped: p.mapped, sample: p.sample };
+    if (opts.dryRun) return { ...summary, dryRun: true };
+    db.transaction(() => { for (const input of p.items) saveEntry(a, input, { audited: false, inTx: true }); });
+    audit(a, 'csv_import', null, `${p.items.length} added, ${p.duplicates} duplicates skipped, ${p.noName + p.otherKinds} other rows skipped (${p.format})`); changed();
+    return { ...summary, added: p.items.length, skipped: p.noName + p.otherKinds };
+  });
+  // CSV out, in the shape browsers and password managers import: name, url, username, password, note. One row per
+  // account (the main login first, then each extra account). Passwords are in clear text, so this is SENSITIVE and audited.
+  api('entries:exportCsv', (a, tabId) => {
+    const tabs = tabMap(), tab = tabs.get(Number(tabId)); if (!tab) throw new Error('Choose a type to export');
+    const urlF = tab.fields.find(fd => fd.type === 'url'), userF = tab.fields.find(fd => fd.key === 'user') || tab.fields.find(fd => /user|login|address/i.test(fd.label) && fd.type === 'text'), passF = tab.fields.filter(fd => fd.type === 'password');
+    const rows = [];
+    for (const { row, e } of everything().filter(x => x.row.tab_id === tab.id)) {
+      const url = urlF ? e.fields[urlF.key] || '' : '';
+      const main = passF.map(fd => e.fields[fd.key]).find(Boolean);
+      if (main) rows.push({ name: e.title, url, user: userF ? e.fields[userF.key] || '' : '', pass: main, note: e.notes });
+      for (const c of e.creds) if (c.secret) rows.push({ name: `${e.title} (${c.label || c.user || 'account'})`, url: c.url || url, user: c.user, pass: c.secret, note: c.note || '' });
+    }
+    audit(a, 'csv_export', null, `${rows.length} rows from one type`);
+    return { name: `strongbox-${T.slug ? T.slug(tab.name) : 'export'}-passwords.csv`, rows: rows.length, text: csv(rows, [['name', r => r.name], ['url', r => r.url], ['username', r => r.user], ['password', r => r.pass], ['note', r => r.note]]).replace(/^\uFEFF/, '') };
+  });
+  // A copy of an entry. Passwords are left empty unless asked for, so a copy never silently creates a reused password.
+  api('entries:duplicate', (a, id, opts = {}) => {
+    const row = rowOf(id); if (!row || row.deleted) throw new Error('No such entry');
+    const tab = tabOfRow(row, tabMap()), e = { ...blank(), ...openEntry(row) }, now = Date.now();
+    const copy = structuredClone(e); copy.title = `Copy of ${e.title}`.slice(0, 200); copy.changed = {}; copy.hist = {}; copy.favorite = false;
+    if (opts.secrets) { for (const k of Object.keys(copy.fields)) if (copy.fields[k]) copy.changed[k] = now; for (const c of copy.creds) { c.id = crypto.randomBytes(6).toString('hex'); if (c.secret) copy.changed['cred:' + c.id] = now; } }
+    else { for (const fd of tab.fields) if (T.SECRET_TYPES.has(fd.type)) delete copy.fields[fd.key]; for (const c of copy.creds) { c.id = crypto.randomBytes(6).toString('hex'); c.secret = ''; c.totp = ''; } }
+    const id2 = db.transaction(() => { const n = Number(db.run('INSERT INTO entries(tab_id, parent_id, created, updated, blob) VALUES(?,?,?,?,?)', row.tab_id, row.parent_id, now, now, EMPTY).lastInsertRowid); db.run('UPDATE entries SET blob=? WHERE id=?', vault.seal(copy, `entry/${n}`), n); return n; });
+    audit(a, 'entry_created', id2, `copy of #${row.id}${opts.secrets ? ' with passwords' : ''}`); changed({ id: id2 });
+    return present(id2);
   });
 
   // ---- tags, entry templates, network overview (small encrypted preferences) ----------------------

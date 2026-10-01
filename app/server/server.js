@@ -15,7 +15,7 @@ const ROLES = {
   GUEST: [],
   STANDARD: ['vault:status', 'vault:touch', 'vault:unlock', 'vault:lock', 'vault:health', 'data:dashboard', 'tabs:list', 'entries:list', 'entries:search', 'entries:get', 'entries:reveal', 'entries:totp', 'entries:print', 'tags:list', 'templates:list', 'network:list'],
   // Ask for the account password again (within 5 minutes) before these.
-  SENSITIVE: ['vault:create', 'vault:rewrap', 'vault:newRecovery', 'vault:resetEmpty', 'vault:backup', 'entries:purge', 'tabs:delete'],
+  SENSITIVE: ['vault:create', 'vault:rewrap', 'vault:newRecovery', 'vault:resetEmpty', 'vault:backup', 'entries:purge', 'entries:exportCsv', 'tabs:delete'],
 };
 
 function buildShell(opts, overrides = {}) {

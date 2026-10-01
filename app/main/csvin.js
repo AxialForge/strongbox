@@ -27,6 +27,8 @@ const ROLES = {
   pass: ['password', 'login_password', 'pass'],
   totp: ['totp', 'login_totp', 'otpauth', 'one-time password', 'otp'],
   notes: ['note', 'notes', 'extra', 'comments', 'notesplain'],
+  folder: ['folder', 'grouping', 'group'],
+  kind: ['type'],
 };
 function mapHeaders(headers) {
   const out = {};
@@ -34,4 +36,16 @@ function mapHeaders(headers) {
   return out;
 }
 
-module.exports = { parseCsv, mapHeaders };
+/** Names the program a CSV came from, by its header row (informational: the mapping works from the headers themselves). */
+function detectFormat(headers) {
+  const h = new Set(headers.map(x => String(x).trim().toLowerCase()));
+  if (h.has('login_uri') && h.has('login_username')) return 'Bitwarden';
+  if (h.has('otpauth') && h.has('title')) return '1Password';
+  if (h.has('grouping') && h.has('extra')) return 'LastPass';
+  if (h.has('httprealm') || h.has('formactionorigin')) return 'Firefox';
+  if (h.has('login name') && h.has('web site')) return 'KeePass';
+  if (h.has('name') && h.has('url') && h.has('username') && h.has('password')) return 'Google Password Manager / Chrome / Edge';
+  return 'a generic CSV';
+}
+
+module.exports = { parseCsv, mapHeaders, detectFormat };

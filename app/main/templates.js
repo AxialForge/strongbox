@@ -132,4 +132,4 @@ function normMac(v) {
 
 const { strengthBits } = require('../renderer/strength');
 
-module.exports = { FIELD_TYPES, SECRET_TYPES, TAB_COLORS, DEFAULT_TABS, BUILTIN_TEMPLATES, TAB_ICONS, cleanTab, cleanTemplate, normIp, normMac, normPort, strengthBits };
+module.exports = { FIELD_TYPES, SECRET_TYPES, TAB_COLORS, DEFAULT_TABS, BUILTIN_TEMPLATES, TAB_ICONS, cleanTab, cleanTemplate, normIp, normMac, normPort, slug, strengthBits };

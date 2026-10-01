@@ -144,7 +144,7 @@ views.entry = guard(async (id) => {
   }).join('');
   v.innerHTML = `<div class="crumbs"><a href="#vault/${e.tabId}">${esc(tab.icon)} ${esc(tab.name)}</a>${e.path.map(p => ` › <a href="#entry/${p.id}">${esc(p.title)}</a>`).join('')}</div>
     <div class="detail-head"><h1>${esc(e.title)} ${e.favorite ? '<span class="warn">★</span>' : ''}</h1>${e.subtitle ? `<span class="muted">${esc(e.subtitle)}</span>` : ''}<span class="grow"></span><button id="ePrint" title="Print this entry">Print…</button>
-      ${isAdmin() ? `<a href="#edit/${e.id}"><button class="primary">Edit</button></a><a href="#new/${e.tabId}/${e.id}"><button>Add nested</button></a><button id="eMove">Move</button><button id="eTpl" title="Use this entry's structure for new ones">Save as template</button><button class="danger" id="eDel">Delete</button>` : ''}</div>
+      ${isAdmin() ? `<a href="#edit/${e.id}"><button class="primary">Edit</button></a><a href="#new/${e.tabId}/${e.id}"><button>Add nested</button></a><button id="eMove">Move</button><button id="eDup" title="Make a copy of this entry">Duplicate</button><button id="eTpl" title="Use this entry's structure for new ones">Save as template</button><button class="danger" id="eDel">Delete</button>` : ''}</div>
     <div class="tiny muted" style="margin:-4px 0 10px">${e.tags.map(SB.tagBadge).join('')} created ${fmtDate(e.created)} · edited ${fmtAgo(e.updated)}</div>
     <div class="grid2">
       <div>
@@ -167,6 +167,14 @@ views.entry = guard(async (id) => {
   $$('[data-user]', v).forEach(b => { b.onclick = () => SB.copy(b.dataset.user, 'Copied', false); });
   if ($('#toggleEmpty')) $('#toggleEmpty').onclick = () => { store.set('hideEmpty', hideEmpty ? '0' : '1'); UI.route(); };
   $$('[data-text]', v).forEach(b => { b.onclick = () => SB.copy(b.dataset.text, 'Copied', false); });
+  if ($('#eDup')) $('#eDup').onclick = () => {
+    const card = openModal(`<h2>Duplicate "${esc(e.title)}"</h2><div class="path">A new entry next to this one with the same type, tags, fields, accounts, specs and notes.</div>
+      <div class="field"><label>Passwords</label><label class="inline small"><input type="checkbox" id="dpSecrets"> also copy the passwords, keys and 2FA seeds</label></div>
+      <div class="hint tiny muted" style="margin:-4px 0 8px">Leave it off for a new device: you get empty password fields to fill with fresh ones (a copied password would count as reused).</div>
+      <div class="actions"><span class="grow"></span><button id="dpCancel">Cancel</button><button class="primary" id="dpGo">Duplicate</button></div>`);
+    $('#dpCancel', card).onclick = closeModal;
+    $('#dpGo', card).onclick = async () => { try { const c = await api.entries.duplicate(e.id, { secrets: $('#dpSecrets', card).checked }); closeModal(); toast('Copy made. Change its title and details.'); location.hash = '#edit/' + c.id; } catch (ex) { toast(ex.message, true); } };
+  };
   $('#ePrint').onclick = () => SB.printDialog([e.id], { title: e.title, hasKids: kids.length > 0 });
   if ($('#eTpl')) $('#eTpl').onclick = () => {
     const card = openModal(`<h2>Save as template</h2><div class="path">Keeps the type, tags, spec names, account names and interface names. Never a password or a secret.</div>
@@ -392,11 +400,11 @@ views.trash = guard(async () => {
 });
 
 // ---------- activity (the vault's own audit trail) ----------------------------------------------------------------------
-const ACTIONS = { vault_created: 'Vault created', unlock: 'Unlocked', unlock_failed: 'Failed unlock', unlock_blocked: 'Unlock blocked (too many failures)', lock: 'Locked', autolock: 'Auto-locked (idle)', reveal: 'Secret shown or copied', totp: 'Authenticator code shown', entry_created: 'Entry created', entry_saved: 'Entry edited', entry_moved: 'Entry moved', entry_trashed: 'Moved to trash', entry_restored: 'Restored from trash', entries_purged: 'Deleted for good', csv_import: 'CSV imported', print: 'Printed', tab_created: 'Type created', tab_saved: 'Type edited', tab_deleted: 'Type deleted', unlock_method_changed: 'Unlock method changed', recovery_key_renewed: 'New recovery key', backup_downloaded: 'Backup downloaded', vault_reset: 'Empty vault reset' };
+const ACTIONS = { vault_created: 'Vault created', unlock: 'Unlocked', unlock_failed: 'Failed unlock', unlock_blocked: 'Unlock blocked (too many failures)', lock: 'Locked', autolock: 'Auto-locked (idle)', reveal: 'Secret shown or copied', totp: 'Authenticator code shown', entry_created: 'Entry created', entry_saved: 'Entry edited', entry_moved: 'Entry moved', entry_trashed: 'Moved to trash', entry_restored: 'Restored from trash', entries_purged: 'Deleted for good', csv_import: 'CSV imported', print: 'Printed', csv_export: 'CSV exported', tab_created: 'Type created', tab_saved: 'Type edited', tab_deleted: 'Type deleted', unlock_method_changed: 'Unlock method changed', recovery_key_renewed: 'New recovery key', backup_downloaded: 'Backup downloaded', vault_reset: 'Empty vault reset' };
 views.activity = guard(async () => {
   const v = UI.view();
   const rows = await api.vault.audit(500);
-  const cls = (a) => (/failed|blocked/.test(a) ? 'bad' : /reveal|totp|method|recovery|purged|backup|reset|csv|print/.test(a) ? 'warn' : '');
+  const cls = (a) => (/failed|blocked/.test(a) ? 'bad' : /reveal|totp|method|recovery|purged|backup|reset|csv|print|export/.test(a) ? 'warn' : '');
   v.innerHTML = `<h1>Activity</h1><p class="lead">Who unlocked the vault and who looked at which secret. Entry names are shown only while the vault is open; the log itself never holds a secret.</p>
     <div class="card scroll-x"><table><thead><tr><th>When</th><th>What</th><th>Entry</th><th>Who</th><th>Address</th><th>Detail</th></tr></thead><tbody>${rows.map(r => `<tr><td class="muted nowrap">${fmtDate(r.ts)}</td><td class="${cls(r.action)}">${esc(ACTIONS[r.action] || r.action)}</td><td class="wrap">${r.entry ? (r.entry.tab ? link(r.entry_id, r.entry.title) : esc(r.entry.title)) : ''}</td><td>${esc(r.actor || '')}</td><td class="muted">${esc(r.ip || '')}</td><td class="muted tiny">${esc(r.detail || '')}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Nothing yet.</td></tr>'}</tbody></table></div>`;
 });
@@ -428,7 +436,8 @@ views.settings = guard(async () => {
     <div class="section-head"><h2>Backup and import</h2></div>
     <div class="card">
       <div class="field"><label>Encrypted backup</label><div><button id="sBackup">Download a backup</button><div class="hint">A complete copy of the database. It is still encrypted: restoring it needs the same passphrase and key file (or the recovery key). To restore, stop the service and replace <span class="mono">strongbox.db</span>.</div></div></div>
-      <div class="field"><label>Import a CSV</label><div><div class="inline"><select id="iTab">${tabs.map(t => `<option value="${t.id}">${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select><input type="file" id="iFile" accept=".csv,text/csv"><button id="iGo">Import</button></div><div class="hint">From Chrome, Edge, Firefox, Bitwarden, 1Password or KeePass exports (name, url, username, password, notes). <b>Delete the CSV afterwards</b>: it holds every password in clear text.</div></div></div>
+      <div class="field"><label>Import a CSV</label><div><div class="inline"><select id="iTab">${tabs.map(t => `<option value="${t.id}">${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select><input type="file" id="iFile" accept=".csv,text/csv"><button id="iGo">Preview…</button></div><div class="hint">Works with exports from <b>Google Password Manager</b> (passwords.google.com → Settings → Export passwords), Chrome, Edge, Firefox, Bitwarden, 1Password, LastPass and KeePass. You get a preview first, and duplicates are skipped. <b>Delete the CSV afterwards</b>: it holds every password in clear text.</div></div></div>
+      <div class="field"><label>Export a CSV</label><div><div class="inline"><select id="xTab">${tabs.map(t => `<option value="${t.id}" ${t.builtin === 'websites' ? 'selected' : ''}>${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select><button id="xGo">Export…</button></div><div class="hint">name, url, username, password, note: the format Google Password Manager, Chrome, Edge, Firefox and Bitwarden import (passwords.google.com → Settings → Import). Each extra account on an entry becomes its own row. <b>The file holds passwords in clear text</b>: this asks for your account password again and is logged.</div></div></div>
       ${stats.entries === 0 ? '<div class="field"><label>Start over</label><div><button class="danger" id="sReset">Reset the empty vault</button><div class="hint">Only offered while the vault holds no entries: lets you choose a different unlock method from scratch.</div></div></div>' : ''}
     </div>
     ${notif.html}${ha.html}${look.html}</div>`;
@@ -438,7 +447,23 @@ views.settings = guard(async () => {
   $('#sChange').onclick = () => { const card = openModal('<div id="wizBox"></div>'); SB.wizard($('#wizBox', card), { change: true, hasRecovery: st.hasRecovery, cancel: closeModal, run: (o) => api.vault.rewrap(o), done: () => { closeModal(); toast('Unlock method changed'); UI.route(); } }); };
   $('#sRecovery').onclick = async () => { if (!confirm('Make a new recovery key? The old one stops working.')) return; try { const key = await api.vault.newRecovery(); const card = openModal(`<h2>New recovery key</h2><p class="warnbox">Shown once. The old key no longer works.</p><div class="secret" style="word-break:break-all">${esc(key)}</div><div class="inline" style="margin-top:10px"><button id="rkCopy">Copy</button><button id="rkPrint">Print</button></div><div class="actions"><span class="grow"></span><button class="primary" id="rkDone">I have saved it</button></div>`); $('#rkCopy', card).onclick = () => SB.writeClipboard(key).then(ok => toast(ok ? 'Copied' : 'Copy blocked', !ok)); $('#rkPrint', card).onclick = () => { const w = window.open('', '_blank', 'width=520,height=380'); if (!w) return toast('Allow pop-ups to print', true); w.document.write(`<pre style="font:18px Consolas,monospace;padding:24px">Strongbox recovery key\n${new Date().toDateString()}\n\n${key}\n\nKeep this paper somewhere safe.</pre>`); w.document.close(); w.print(); }; $('#rkDone', card).onclick = () => { closeModal(); UI.route(); }; } catch (e) { toast(e.message, true); } };
   $('#sBackup').onclick = async () => { try { const b = await api.vault.backup(); SB.download(b.name, b.base64, 'application/octet-stream', true); toast('Backup downloaded'); } catch (e) { toast(e.message, true); } };
-  $('#iGo').onclick = async () => { const f = $('#iFile').files[0]; if (!f) return toast('Choose a CSV file first', true); if (f.size > 5e6) return toast('That file is too large', true); if (!confirm(`Import "${f.name}" into the chosen type?`)) return; try { const r = await api.entries.importCsv(Number($('#iTab').value), await f.text()); toast(`${r.added} imported${r.skipped ? `, ${r.skipped} skipped` : ''}. Now delete that CSV file.`); } catch (e) { toast(e.message, true); } };
+  $('#iGo').onclick = async () => {
+    const f = $('#iFile').files[0]; if (!f) return toast('Choose a CSV file first', true); if (f.size > 5e6) return toast('That file is too large', true);
+    const tabId = Number($('#iTab').value), text = await f.text(), tname = $('#iTab').selectedOptions[0].textContent.trim();
+    let pv; try { pv = await api.entries.importCsv(tabId, text, { dryRun: true, skipDuplicates: true }); } catch (e) { return toast(e.message, true); }
+    const card = openModal(`<h2>Import preview</h2><div class="path">${esc(f.name)} · looks like ${esc(pv.format)} · into <b>${esc(tname)}</b></div>
+      <div class="tiles compact">${tile('okt', 'Will be added', pv.willAdd, `of ${pv.total} rows`)}${tile(pv.duplicates ? 'warnt' : '', 'Duplicates', pv.duplicates, 'same site and user already here')}${tile('', 'Skipped', pv.noName + pv.otherKinds, 'no name, or notes and cards')}</div>
+      <div class="muted small" style="margin:8px 0">Mapped to: ${Object.entries(pv.mapped).map(([k, v]) => `${esc(k)} → <b>${esc(v)}</b>`).join(' · ') || 'nothing; this type has no matching fields'}</div>
+      <div class="scroll-x"><table><thead><tr><th>Title</th><th>Address</th><th>User</th><th>Password</th></tr></thead><tbody>${pv.sample.map(r => `<tr><td>${esc(r.title)}</td><td class="muted">${esc(r.url)}</td><td>${esc(r.user)}</td><td>${r.password ? '••••••' : '<span class="muted">none</span>'}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Nothing to add.</td></tr>'}</tbody></table></div>
+      <div class="field" style="margin-top:10px"><label>Duplicates</label><label class="inline small"><input type="checkbox" id="ivSkip" checked> skip entries that already exist (same site and user name)</label></div>
+      <div class="actions"><span class="grow"></span><button id="ivCancel">Cancel</button><button class="primary" id="ivGo" ${pv.willAdd || pv.duplicates ? '' : 'disabled'}>Import</button></div>`);
+    $('#ivCancel', card).onclick = closeModal;
+    $('#ivGo', card).onclick = async () => { try { const r = await api.entries.importCsv(tabId, text, { skipDuplicates: $('#ivSkip', card).checked }); closeModal(); toast(`${r.added} imported${r.duplicates ? `, ${r.duplicates} duplicates skipped` : ''}. Now delete that CSV file.`); } catch (e) { toast(e.message, true); } };
+  };
+  $('#xGo').onclick = async () => {
+    if (!confirm('This downloads every password in the chosen type as a CSV in clear text. Anyone who gets the file can read them. Import it where you need it, then delete it (and empty the recycle bin).\n\nContinue?')) return;
+    try { const r = await api.entries.exportCsv(Number($('#xTab').value)); if (!r.rows) return toast('Nothing to export: no entry in that type has a password', true); SB.download(r.name, r.text, 'text/csv'); toast(`${r.rows} row${r.rows === 1 ? '' : 's'} exported. Delete the file when you are done.`); } catch (e) { toast(e.message, true); }
+  };
   if ($('#sReset')) $('#sReset').onclick = async () => { if (!confirm('Reset the vault? There is nothing in it, so nothing is lost.')) return; try { await api.vault.resetEmpty(); toast('Vault reset'); location.hash = '#dashboard'; UI.route(); } catch (e) { toast(e.message, true); } };
 });
 
@@ -576,4 +601,14 @@ UI.init({
   standardRoleText: 'open the vault and read it (every look at a secret is logged), but not add, edit or delete.',
   logHint: 'on the Pi also: journalctl -u strongbox -f',
   onReady: async () => { await loadSettings(); SB.lockBox(); },
+});
+
+// ---------- keyboard: / search, n new entry, ? help -------------------------------------------------------------------
+document.addEventListener('keydown', (ev) => {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey || !SB.status || SB.status.state !== 'unlocked') return;
+  const t = ev.target; if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+  if (!$('#modal').hidden) return;
+  if (ev.key === '/') { ev.preventDefault(); if (UI.current() !== 'vault') location.hash = '#vault'; setTimeout(() => { const q = $('#q'); if (q) q.focus(); }, UI.current() === 'vault' ? 0 : 500); }
+  else if (ev.key === 'n' && isAdmin()) { location.hash = '#new/' + (Number(store.get('vaultTab', '')) || 1); }
+  else if (ev.key === '?') toast('Keys: / search · n new entry · Esc close a dialog');
 });

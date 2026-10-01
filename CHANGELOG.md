@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-01
+
+### Added
+
+- **Import with a preview.** Choose a CSV (Google Password Manager, Chrome, Edge, Firefox, Bitwarden, 1Password, LastPass, KeePass) and see which program it came from, how many rows will be added, how many are duplicates (same site and user), how many are skipped (notes, cards, nameless rows) and which fields they map to, before anything is written. Duplicates are skipped by default. A Bitwarden / LastPass folder becomes a tag; a Firefox export with no names gets the site as the title.
+- **Export a CSV** in the browser format (name, url, username, password, note) that Google Password Manager, Chrome, Edge, Firefox and Bitwarden import. Each extra account on an entry becomes its own row. Asks for the account password again and is logged in Activity as "CSV exported".
+- **Duplicate** an entry (button on the entry page), with or without its passwords.
+- Keyboard: **/** searches, **n** starts a new entry, **?** lists the keys.
+
 ## [0.6.0] - 2026-10-01
 
 ### Added

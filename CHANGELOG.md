@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-01
+
+### Fixed
+
+- Adding a login, interface, spec or changing the type in the entry editor no longer jumps back to the top of the page. The page keeps its scroll position and the new row gets the cursor.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added

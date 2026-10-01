@@ -106,6 +106,8 @@ remembers which defaults were already offered, so a type the user deleted never 
 - **The browser clipboard needs HTTPS.** `navigator.clipboard` is undefined on plain http (a bare IP); `util.js` falls back to `execCommand('copy')`, but behind Caddy with `tls internal` the real API works. Phones need the Caddy root certificate installed.
 - **Passwords typed into the browser pass through the Pi in the clear (inside TLS).** Crypto is server-side by design (search, health, authenticator codes). The cost is that root on the Pi while the vault is unlocked can read it; the mitigations are auto-lock, swap off, LAN-only and a short idle time.
 
+- **The entry editor redraws the whole form** (adding a row, changing the type) from a `draft` object. Symptom: the page jumped to the top on every "Add login". Cause: the redraw replaced the content and `render()` focused the title field each time. It now keeps `scrollTop`, focuses the title only on the first draw, and focuses the new row. Any new redraw path must go through `render()`.
+
 ## Roadmap (unbuilt)
 
 - Rotate the data key (re-encrypt every record) from Settings.

@@ -229,6 +229,7 @@ async function editor(mode, arg) {
     draft.nics = $$('.nicrow').map(r => ({ label: $('.nl', r).value, ip: $('.ni', r).value, mac: $('.nm', r).value }));
   };
   const render = () => {
+    const keepY = v.scrollTop, keepW = window.scrollY; // adding a row redraws the form: stay where you were
     const tab = tabs.find(t => t.id === draft.tabId);
     const input = (fd) => {
       const val = draft.fields[fd.key] ?? '';
@@ -265,7 +266,9 @@ async function editor(mode, arg) {
         <div class="inline" style="margin:14px 0 40px"><button class="primary" id="eSave">${mode === 'edit' ? 'Save changes' : 'Create entry'}</button><button type="button" id="eCancel">Cancel</button><span class="bad small" id="eErr"></span></div>
       </form>`;
     wire();
+    v.scrollTop = keepY; window.scrollTo(0, keepW);
   };
+  const focusLast = (sel) => { const rows = $$(sel); const last = rows[rows.length - 1]; if (last) { const i = $('input', last); if (i) i.focus({ preventScroll: false }); } };
   const wire = () => {
     $('#eTab').onchange = () => { collect(); render(); };
     $('#eCancel').onclick = () => { location.hash = existing ? '#entry/' + existing.id : '#vault'; };
@@ -274,10 +277,10 @@ async function editor(mode, arg) {
     $$('[data-eye]').forEach(b => { b.onclick = () => { const i = b.closest('.secretin, .inline').querySelector('input'); i.type = i.type === 'password' ? 'text' : 'password'; b.textContent = i.type === 'password' ? 'Show' : 'Hide'; }; });
     $$('[data-gen]').forEach(b => { b.onclick = () => SB.generatorModal((pw) => { const i = b.closest('.secretin, .inline').querySelector('input'); i.value = pw; i.dataset.dirty = '1'; i.type = 'text'; meter(i); const eye = b.closest('.secretin, .inline').querySelector('[data-eye]'); if (eye) eye.textContent = 'Hide'; }, b.dataset.gen || null); });
     $$('[data-addtag]').forEach(a => { a.onclick = () => { const i = $('#eTags'), cur = i.value.split(',').map(x => x.trim()).filter(Boolean); if (!cur.includes(a.dataset.addtag)) cur.push(a.dataset.addtag); i.value = cur.join(', '); }; });
-    $('#addNic').onclick = () => { collect(); draft.nics.push({ label: '', ip: '', mac: '' }); render(); };
+    $('#addNic').onclick = () => { collect(); draft.nics.push({ label: '', ip: '', mac: '' }); render(); focusLast('.nicrow'); };
     $$('[data-undo]').forEach(b => { b.onclick = () => { collect(); const key = b.closest('.secretin').querySelector('[data-f]').dataset.f; delete draft.secrets[key]; render(); }; });
     $$('[data-rm]').forEach(b => { b.onclick = () => { collect(); const row = b.closest('.credrow, .specrow, .nicrow'); const rows = row.classList.contains('credrow') ? draft.creds : row.classList.contains('nicrow') ? draft.nics : draft.specs; const idx = [...row.parentElement.children].indexOf(row); rows.splice(idx, 1); render(); }; });
-    $('#addCred').onclick = () => { collect(); draft.creds.push({ label: '', user: '', url: '', has: false }); render(); };
+    $('#addCred').onclick = () => { collect(); draft.creds.push({ label: '', user: '', url: '', has: false }); render(); focusLast('.credrow'); };
     $('#specPreset').onchange = (ev) => { collect(); const val = ev.target.value; if (!val) return; draft.specs.push({ k: val === '__other' ? '' : val, v: '' }); render(); const rows = $$('.specrow'); const last = rows[rows.length - 1]; if (last) $(val === '__other' ? '.sk' : '.sv', last).focus(); };
     $('#eForm').onsubmit = async (ev) => {
       ev.preventDefault(); collect();
@@ -286,8 +289,9 @@ async function editor(mode, arg) {
       $('#eSave').disabled = true;
       try { const saved = await api.entries.save(payload); toast('Saved'); location.hash = '#entry/' + saved.id; } catch (e) { $('#eSave').disabled = false; $('#eErr').textContent = e.message; }
     };
-    $('#eTitle').focus();
+    if (firstDraw) { $('#eTitle').focus(); firstDraw = false; }
   };
+  let firstDraw = true;
   render();
 }
 views.edit = guard((id) => editor('edit', id));

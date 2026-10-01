@@ -123,6 +123,10 @@ remembers which defaults were already offered, so a type the user deleted never 
 
 - **Account kinds decide what is stored.** `T.SECRET_KINDS` (password, pin, smartcard, recovery, other) keep a secret; saving any other kind clears `secret` and `totp` on purpose. Health judges strength and reuse only for `password` / `other`; `recovery` skips breached and old checks too. A link (`cred.link`, an entry id) is resolved by `linkInfo()` (title, user, whether it has a secret) and revealed only through `entries:reveal` with `lnk:<accountId>`, which re-checks `canSee` on the linked entry. Never copy a linked secret into the linking entry.
 
+- **Backup-code sets are edited through their own handlers (`codes:*`), not `entries:save`.** The page only ever gets a set's label, size and how many are left; the codes come from `codes:reveal` / `codes:next` (both logged, both behind `denyReveal`). `entries:save` keeps `codeSets` because `e` is spread from the previous blob; security questions are replaced only when `questions` is in the input, and an answer is kept when none is sent.
+- **Tab field keys are stored slugged (lower-case): `recoveryTo` becomes `recoveryto`.** The default-field migration (`tabsRev`) compares `T.slug(key)`; comparing raw keys added a duplicate `recoveryto_2` to the E-mail type in a draft and made a "missing" field look absent in the test. Any code that matches a default field by key must slug it first.
+- **The default-type migration only adds**: missing fields and new choices in a `select`. It never removes or edits a field, so a field the user deleted comes back once (the cost of making new defaults reach old vaults).
+
 ## Roadmap (unbuilt)
 
 - "Remember this key file on this device" (an opt-in convenience; weakens the second factor).

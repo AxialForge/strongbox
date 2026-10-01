@@ -371,6 +371,60 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.ok(H('entries:print', [pc.id], {}).docs[0].accounts.map(c => c.kind).includes('PIN'));
   const fromPc = H('templates:save', { fromEntry: pc.id, name: 'My PC shape' }).find(t => t.name === 'My PC shape'); assert.deepStrictEqual(fromPc.creds.map(c => c.kind), ['password', 'pin', 'biometric', 'hwkey', 'recovery']); assert.ok(fromPc.creds.every(c => c.user === ''));
 
+  // ---- backup codes, security questions, the other kinds of secret ---------------------------------------------------
+  const igTab = H('tabs:list').find(t => t.builtin === 'websites');
+  const ig = H('entries:save', { tabId: igTab.id, title: 'Instagram', fields: { url: 'https://instagram.com', user: 'joe.maker' }, secrets: { pass: 'Ig7!kQ2#pLs9vW3z' } });
+  const added = H('codes:add', ig.id, 'Instagram backup codes', '12345678\n23456789\n  34567890 \n\n45678901\n56789012\n12345678');
+  assert.deepStrictEqual(added.codeSets.map(s => [s.label, s.total, s.left]), [['Instagram backup codes', 5, 5]], 'blank lines and repeats are dropped');
+  assert.ok(!JSON.stringify(added).includes('23456789') && !JSON.stringify(H('entries:list')).includes('23456789'), 'the codes are never in an entry or a list');
+  const setId = added.codeSets[0].id;
+  assert.deepStrictEqual(H('codes:reveal', ig.id, setId).codes.map(c => c.c), ['12345678', '23456789', '34567890', '45678901', '56789012']);
+  assert.deepStrictEqual(H('codes:mark', ig.id, setId, 1, true), { left: 4, total: 5 });
+  assert.strictEqual(H('codes:next', ig.id, setId).code, '12345678'); assert.strictEqual(H('codes:next', ig.id, setId).code, '34567890', 'the next unused one, and a used one is skipped');
+  assert.strictEqual(H('entries:get', ig.id).codeSets[0].left, 2);
+  assert.ok(H('vault:health').lowCodes.some(x => x.id === ig.id && x.left === 2), 'two left is low');
+  H('codes:mark', ig.id, setId, 1, false); assert.ok(!H('vault:health').lowCodes.some(x => x.id === ig.id), 'three left is fine'); H('codes:mark', ig.id, setId, 1, true);
+  H('codes:next', ig.id, setId); H('codes:next', ig.id, setId); assert.throws(() => H('codes:next', ig.id, setId), /used up/);
+  assert.strictEqual(H('codes:reveal', ig.id, setId).codes.every(c => c.used), true);
+  const oneLine = H('codes:add', ig.id, '', 'aaaa-1111 bbbb-2222 cccc-3333'); assert.strictEqual(oneLine.codeSets[1].total, 3); assert.strictEqual(oneLine.codeSets[1].label, 'Backup codes', 'a single line is split on spaces');
+  H('codes:replace', ig.id, setId, 'new-code-1\nnew-code-2\nnew-code-3'); assert.strictEqual(H('entries:get', ig.id).codeSets[0].left, 3);
+  H('codes:rename', ig.id, setId, 'IG codes (Oct 2026)'); assert.strictEqual(H('entries:get', ig.id).codeSets[0].label, 'IG codes (Oct 2026)');
+  assert.deepStrictEqual(H('entries:search', 'IG codes'), [ig.id], 'a set is found by its label, never by a code'); assert.deepStrictEqual(H('entries:search', 'new-code-1'), []);
+  assert.throws(() => H('codes:add', ig.id, 'x', ' \n , '), /No codes found/); assert.throws(() => H('codes:reveal', ig.id, 'nope'), /No such set/);
+  const igEdit = H('entries:save', { id: ig.id, tabId: igTab.id, title: 'Instagram', fields: { user: 'joe.maker' } }); assert.strictEqual(igEdit.codeSets.length, 2, 'editing the entry keeps its codes');
+  const pr2 = H('entries:print', [ig.id], {}).docs[0]; assert.ok(pr2.codeSets[0].codes === null && pr2.codeSets[0].left === 3); assert.ok(H('entries:print', [ig.id], { secrets: true }).docs[0].codeSets[0].codes.length === 3);
+  assert.throws(() => call({ user: 'bob', role: 'standard' }, 'codes:reveal', ig.id, setId) && (svc.settings.set({ vault: { noReveal: ['bob'] } }), call({ user: 'bob', role: 'standard' }, 'codes:reveal', ig.id, setId)), /not their passwords/); svc.settings.set({ vault: { noReveal: [] } });
+  const dupIg = H('entries:duplicate', ig.id); assert.strictEqual(dupIg.codeSets.length, 0, 'a copy leaves the codes behind'); assert.strictEqual(H('entries:duplicate', ig.id, { secrets: true }).codeSets.length, 2);
+  svc.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); assert.ok(!allFileBytes().includes('new-code-2') && !allFileBytes().includes('aaaa-1111'), 'codes are encrypted on disk');
+
+  const bank = H('entries:save', { tabId: igTab.id, title: 'First Bank', questions: [{ q: 'First pet?', a: 'Rex the dog' }, { q: 'Street you grew up on', a: 'Maple Ave' }] });
+  assert.deepStrictEqual(bank.questions.map(q => [q.q, q.set]), [['First pet?', true], ['Street you grew up on', true]]); assert.ok(!JSON.stringify(bank).includes('Rex'), 'answers never come back');
+  assert.strictEqual(H('entries:reveal', bank.id, 'qa:' + bank.questions[0].id), 'Rex the dog');
+  const qKept = H('entries:save', { id: bank.id, tabId: igTab.id, title: 'First Bank', questions: [{ id: bank.questions[0].id, q: 'First pet? (edited)' }, { id: bank.questions[1].id, q: 'Street', a: 'Oak Ln' }] });
+  assert.strictEqual(H('entries:reveal', bank.id, 'qa:' + qKept.questions[0].id), 'Rex the dog', 'an untouched answer is kept'); assert.strictEqual(H('entries:reveal', bank.id, 'qa:' + qKept.questions[1].id), 'Oak Ln');
+  assert.strictEqual(H('entries:save', { id: bank.id, tabId: igTab.id, title: 'First Bank' }).questions.length, 2, 'an edit that says nothing keeps them');
+  assert.ok(H('entries:print', [bank.id], {}).docs[0].questions.every(q => q.a === '••••••••') && !JSON.stringify(H('entries:print', [bank.id], {})).includes('Oak Ln'));
+  assert.ok(H('entries:search', 'First pet').includes(bank.id), 'question texts are searchable');
+
+  const kindsEntry = H('entries:save', { tabId: hw.id, title: 'Dev laptop', creds: [
+    { label: 'Gmail app password', kind: 'apppass', secret: 'abcd efgh ijkl mnop' }, { label: 'GitHub token', kind: 'token', secret: 'ghp_exampletoken1234567890' },
+    { label: 'Deploy key', kind: 'sshkey', secret: '-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----' }, { label: 'Wallet', kind: 'seed', secret: 'abandon ability able about above absent absorb abstract absurd abuse access accident' }] });
+  assert.deepStrictEqual(kindsEntry.creds.map(c => [c.kind, c.set]), [['apppass', true], ['token', true], ['sshkey', true], ['seed', true]]);
+  assert.ok(H('entries:reveal', kindsEntry.id, 'cred:' + kindsEntry.creds[2].id).includes('\nAAAA\n'), 'a multi-line key survives');
+  const hk = H('vault:health'); assert.ok(!hk.weak.some(x => x.id === kindsEntry.id) && !hk.reused.some(x => x.id === kindsEntry.id) && !hk.breached.some(x => x.id === kindsEntry.id), 'tokens, keys and seed phrases are not judged like passwords');
+  assert.ok(!H('entries:exportCsv', hw.id).text.includes('ghp_example'), 'and are not exported as browser passwords');
+  assert.ok(require('../main/templates').MULTILINE_KINDS.has('seed') && require('../main/templates').ACCOUNT_KINDS.length >= 13);
+  assert.ok(['b:wallet', 'b:ssh'].every(id => H('templates:list').some(t => t.id === id)));
+
+  // an older vault gains the fields and choices added since, once, without losing anything
+  const wsTab = H('tabs:list').find(t => t.builtin === 'websites'), keysTab = H('tabs:list').find(t => t.builtin === 'keys');
+  H('tabs:save', { ...wsTab, fields: wsTab.fields.filter(f => f.key !== 'recoveryto') }); H('tabs:save', { ...keysTab, fields: keysTab.fields.map(f => (f.key === 'kind' ? { ...f, options: ['Hardware security key', 'Other'] } : f)) });
+  svc.db.kvSet('tabsRev', 1); H('vault:lock'); svc.vault.fails = 0; await H('vault:unlock', { keyFile: kfOnly.keyFile });
+  assert.ok(H('tabs:list').find(t => t.builtin === 'websites').fields.some(f => f.key === 'recoveryto'), 'a missing default field comes back once');
+  assert.ok(H('tabs:list').find(t => t.builtin === 'keys').fields.find(f => f.key === 'kind').options.includes('Backup codes'), 'and new choices are added to a list');
+  assert.ok(H('tabs:list').find(t => t.builtin === 'keys').fields.find(f => f.key === 'kind').options.includes('Hardware security key'));
+  assert.strictEqual(H('tabs:list').find(t => t.builtin === 'email').fields.filter(f => f.key.startsWith('recoveryto')).length, 1, 'the migration never duplicates a field that is already there');
+
   // ---- attachments: encrypted, searchable by nobody, gone with the entry ---------------------------------------
   const FILE_MARK = 'canary-file-bytes-5d2e', FILE_NAME = 'canary-name-serial-plate.png';
   const fl = svc.files.add({ user: 'joe' }, server.id, FILE_NAME, 'image/png', Buffer.from('PNGDATA ' + FILE_MARK));

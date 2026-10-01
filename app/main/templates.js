@@ -24,9 +24,9 @@ const TAB_COLORS = ['blue', 'violet', 'pink', 'red', 'amber', 'green', 'teal', '
 const ACCOUNT_KINDS = [
   { id: 'password', label: 'Password', secret: true }, { id: 'pin', label: 'PIN', secret: true }, { id: 'hwkey', label: 'Hardware key', secret: false },
   { id: 'biometric', label: 'Fingerprint / face', secret: false }, { id: 'passkey', label: 'Passkey', secret: false }, { id: 'smartcard', label: 'Smart card (PIN)', secret: true },
-  { id: 'recovery', label: 'Recovery key', secret: true }, { id: 'linked', label: 'Signs in with another entry', secret: false }, { id: 'other', label: 'Other', secret: true },
+  { id: 'recovery', label: 'Recovery key', secret: true }, { id: 'linked', label: 'Signs in with another entry', secret: false }, { id: 'apppass', label: 'App password', secret: true }, { id: 'token', label: 'API token / access key', secret: true }, { id: 'sshkey', label: 'SSH / PGP private key', secret: true, multiline: true }, { id: 'seed', label: 'Recovery phrase (seed words)', secret: true, multiline: true }, { id: 'other', label: 'Other', secret: true },
 ];
-const KIND_IDS = ACCOUNT_KINDS.map(k => k.id), SECRET_KINDS = new Set(ACCOUNT_KINDS.filter(k => k.secret).map(k => k.id));
+const KIND_IDS = ACCOUNT_KINDS.map(k => k.id), SECRET_KINDS = new Set(ACCOUNT_KINDS.filter(k => k.secret).map(k => k.id)), MULTILINE_KINDS = new Set(ACCOUNT_KINDS.filter(k => k.multiline).map(k => k.id));
 
 const f = (key, label, type = 'text', extra = {}) => ({ key, label, type, ...extra });
 
@@ -42,7 +42,7 @@ const DEFAULT_TABS = [
     f('token', 'API key / token', 'secret'), f('totp', 'Authenticator seed', 'totp'), f('unit', 'Service / unit name'), f('path', 'Install path / data folder'), f('repo', 'Source / docs', 'url'),
   ] },
   { builtin: 'websites', name: 'Websites', icon: '◍', color: 'violet', fields: [
-    f('url', 'Address', 'url'), f('user', 'Username'), f('email', 'E-mail used'), f('pass', 'Password', 'password', { gen: 'strong' }), f('totp', 'Authenticator seed', 'totp'), f('recovery', 'Recovery codes', 'secret', { multiline: true }),
+    f('url', 'Address', 'url'), f('user', 'Username'), f('email', 'E-mail used'), f('pass', 'Password', 'password', { gen: 'strong' }), f('totp', 'Authenticator seed', 'totp'), f('recoveryTo', 'Recovery e-mail / phone'), f('recovery', 'Other recovery notes', 'secret', { multiline: true }),
   ] },
   { builtin: 'email', name: 'E-mail', icon: '✉', color: 'amber', fields: [
     f('address', 'Address'), f('provider', 'Provider'), f('pass', 'Password', 'password', { gen: 'strong' }), f('app', 'App password', 'password', { gen: 'alnum' }), f('totp', 'Authenticator seed', 'totp'),
@@ -60,7 +60,7 @@ const DEFAULT_TABS = [
     f('mac', 'Wi-Fi MAC address', 'mac'), f('bought', 'Purchased', 'date'), f('warranty', 'Warranty until', 'date', { expiry: true }),
   ] },
   { builtin: 'keys', name: 'Keys & licences', icon: '⚿', color: 'green', fields: [
-    f('kind', 'Kind', 'select', { options: ['Hardware security key', 'Software licence', 'SSH key', 'API key', 'GPG key', 'Wi-Fi', 'Certificate', 'Other'] }),
+    f('kind', 'Kind', 'select', { options: ['Hardware security key', 'Software licence', 'SSH key', 'API key', 'GPG key', 'Wi-Fi', 'Certificate', 'Recovery phrase (seed words)', 'Recovery key (disk / account)', 'Backup codes', 'Other'] }),
     f('vendor', 'Vendor / product'), f('serial', 'Serial / key ID'), f('key', 'Key / secret', 'secret', { multiline: true }), f('pin', 'PIN / passphrase', 'secret', { gen: 'pin6' }),
     f('owner', 'Registered to'), f('bought', 'Purchased', 'date'), f('expires', 'Expires', 'date', { expiry: true }),
   ] },
@@ -81,6 +81,8 @@ const BUILTIN_TEMPLATES = [
   { id: 'b:switch', name: 'Switch / access point', icon: '▦', tabKey: 'hardware', tags: ['network'], fields: { kind: 'Switch' }, specs: ['Ports', 'PoE budget', 'Firmware'], creds: ['Web UI', 'SSH / console'], nics: ['Management'] },
   { id: 'b:service', name: 'Service / app', icon: '⚙', tabKey: 'services', tags: ['service'], fields: { kind: 'Web app' }, specs: ['Data folder'], creds: ['Admin', 'API'], nics: [] },
   { id: 'b:wifi', name: 'Wi-Fi network', icon: '≋', tabKey: 'wifi', tags: ['wifi'], fields: { security: 'WPA2/WPA3', hidden: 'No' }, specs: [], creds: [], nics: [] },
+  { id: 'b:wallet', name: 'Crypto wallet', icon: '⚿', tabKey: 'keys', tags: ['crypto'], fields: { kind: 'Recovery phrase (seed words)' }, specs: ['Chain / network', 'Wallet type'], creds: [{ label: 'Recovery phrase', kind: 'seed' }, { label: 'Wallet PIN', kind: 'pin' }], nics: [] },
+  { id: 'b:ssh', name: 'SSH / PGP key pair', icon: '⚿', tabKey: 'keys', tags: ['key'], fields: { kind: 'SSH key' }, specs: ['Key type', 'Fingerprint', 'Used on'], creds: [{ label: 'Private key', kind: 'sshkey' }, { label: 'Key passphrase', kind: 'password' }], nics: [] },
   { id: 'b:website', name: 'Website login', icon: '◍', tabKey: 'websites', tags: [], fields: {}, specs: [], creds: [], nics: [] },
   { id: 'b:key', name: 'Hardware security key', icon: '⚿', tabKey: 'keys', tags: ['2fa'], fields: { kind: 'Hardware security key' }, specs: ['Protocols'], creds: [], nics: [] },
   { id: 'b:licence', name: 'Software licence', icon: '⚿', tabKey: 'keys', tags: ['licence'], fields: { kind: 'Software licence' }, specs: ['Seats', 'Version'], creds: [], nics: [] },
@@ -158,4 +160,4 @@ function normMac(v) {
 
 const { strengthBits } = require('../renderer/strength');
 
-module.exports = { ACCOUNT_KINDS, KIND_IDS, SECRET_KINDS, FIELD_TYPES, SECRET_TYPES, TAB_COLORS, DEFAULT_TABS, BUILTIN_TEMPLATES, TAB_ICONS, cleanTab, cleanTemplate, normIp, normMac, normPort, slug, strengthBits };
+module.exports = { ACCOUNT_KINDS, KIND_IDS, SECRET_KINDS, MULTILINE_KINDS, FIELD_TYPES, SECRET_TYPES, TAB_COLORS, DEFAULT_TABS, BUILTIN_TEMPLATES, TAB_ICONS, cleanTab, cleanTemplate, normIp, normMac, normPort, slug, strengthBits };

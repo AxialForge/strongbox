@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS vault_audit (
 const MIGRATIONS = [];
 
 const DEFAULTS = {
-  vault: { autoLockMinutes: 15, clipboardClearSeconds: 30, revealSeconds: 20, staleDays: 365, weakBits: 50, expiringDays: 60, trashDays: 30, kdfLog2N: 17, genPresets: [], noReveal: [], emergencyNote: '' },
+  vault: { autoLockMinutes: 15, clipboardClearSeconds: 30, revealSeconds: 20, staleDays: 365, weakBits: 50, expiringDays: 60, trashDays: 30, lowCodes: 2, kdfLog2N: 17, genPresets: [], noReveal: [], emergencyNote: '' },
   backup: { time: '03:30' },
   notify: { events: { unlockFailed: true, dailySummary: false } },
 };
@@ -95,7 +95,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   const tabMap = () => new Map(tabList().map(t => [t.id, t]));
   const rowOf = (id) => db.get('SELECT * FROM entries WHERE id=?', Number(id));
   const openEntry = (r) => vault.open(r.blob, `entry/${r.id}`);
-  const blank = () => ({ title: '', subtitle: '', fields: {}, creds: [], specs: [], nics: [], notes: '', tags: [], favorite: false, rotateDays: 0, visibleTo: [], changed: {}, hist: {} });
+  const blank = () => ({ title: '', subtitle: '', fields: {}, creds: [], specs: [], nics: [], notes: '', tags: [], favorite: false, rotateDays: 0, visibleTo: [], codeSets: [], questions: [], changed: {}, hist: {} });
   /** Everything not in the trash, decrypted: [{ row, e }]. */
   const everything = (trash = false, a = null) => db.all(`SELECT * FROM entries WHERE deleted IS ${trash ? 'NOT ' : ''}NULL ORDER BY id`).map(row => ({ row, e: { ...blank(), ...openEntry(row) } })).filter(x => !a || canSee(a, x.e));
   const tabOfRow = (row, tabs) => tabs.get(row.tab_id) || { id: row.tab_id, name: '(missing tab)', icon: '?', fields: [] };
@@ -126,6 +126,8 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       ...light(row, e, tab), deleted: row.deleted || null, fields: plainFields(e, tab, true), secrets, path,
       creds: e.creds.map(c => ({ id: c.id, label: c.label, kind: c.kind || 'password', link: c.link || null, linkInfo: c.link ? linkInfo(c.link, a) : null, user: c.user, url: c.url, note: c.note || '', hasTotp: !!c.totp, set: !!c.secret, changed: e.changed['cred:' + c.id] || null, bits: c.secret ? T.strengthBits(c.secret) : undefined, history: (e.hist['cred:' + c.id] || []).map(h => ({ t: h.t })) })),
       specs: e.specs, nics: e.nics, notes: e.notes, visibleTo: e.visibleTo || [],
+      codeSets: (e.codeSets || []).map(cs => ({ id: cs.id, label: cs.label, created: cs.created, total: cs.codes.length, left: cs.codes.filter(c => !c.used).length })),
+      questions: (e.questions || []).map(q => ({ id: q.id, q: q.q, set: !!q.a })),
     };
   }
   // Standard accounts listed in settings may see entries but never passwords, keys, 2FA codes or attachments.
@@ -199,6 +201,10 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     e.specs = (Array.isArray(input.specs) ? input.specs : []).map(s => ({ k: clip(s.k, 60).trim(), v: clip(s.v, 300).trim() })).filter(s => s.k || s.v).slice(0, 100);
     e.rotateDays = 'rotateDays' in input ? Math.max(0, Math.min(3650, Math.floor(Number(input.rotateDays)) || 0)) : prev.rotateDays || 0;
     e.visibleTo = 'visibleTo' in input ? [...new Set((Array.isArray(input.visibleTo) ? input.visibleTo : []).map(u => clip(u, 40).trim()).filter(Boolean))].slice(0, 50) : prev.visibleTo || [];
+    if ('questions' in input) {
+      const prevQ = new Map((prev.questions || []).map(q => [q.id, q]));
+      e.questions = (Array.isArray(input.questions) ? input.questions : []).slice(0, 30).map(q => { const pq = q.id && prevQ.get(q.id); return { id: pq ? pq.id : crypto.randomBytes(6).toString('hex'), q: clip(q.q, 200).trim(), a: typeof q.a === 'string' ? clip(q.a, 500) : pq ? pq.a : '' }; }).filter(q => q.q || q.a);
+    }
     e.nics = (Array.isArray(input.nics) ? input.nics : []).map(n => ({ label: clip(n.label, 60).trim(), ip: T.normIp(n.ip), mac: T.normMac(n.mac) })).filter(n => n.label || n.ip || n.mac).slice(0, 30);
     for (const fd of tab.fields) {
       if (T.SECRET_TYPES.has(fd.type)) {
@@ -244,9 +250,21 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     db.run('UPDATE tabs SET blob=? WHERE id=?', vault.seal(clean, `tab/${id}`), id);
     return id;
   }
-  const seedTabs = () => { db.transaction(() => { T.DEFAULT_TABS.forEach((t, i) => writeTab(t, null, i)); }); db.kvSet('seededTabs', T.DEFAULT_TABS.map(t => t.builtin)); };
+  const seedTabs = () => { db.transaction(() => { T.DEFAULT_TABS.forEach((t, i) => writeTab(t, null, i)); }); db.kvSet('seededTabs', T.DEFAULT_TABS.map(t => t.builtin)); db.kvSet('tabsRev', 2); };
   /** Default types added in later versions appear once in an existing vault, right after the type that precedes them in the defaults. */
   function ensureDefaultTabs() {
+    if ((db.kvGet('tabsRev', 0) || 0) < 2) { // v0.11: default types gain the fields and choices added since (nothing is ever removed or changed)
+      db.transaction(() => {
+        for (const t of tabList()) {
+          const d = t.builtin && T.DEFAULT_TABS.find(x => x.builtin === t.builtin); if (!d) continue;
+          const have = new Set(t.fields.map(fd => T.slug(fd.key))); let ch = false; // keys are stored slugged (lower-case), so compare slugged
+          const fields = t.fields.map(fd => { const df = d.fields.find(x => T.slug(x.key) === fd.key); if (df && df.type === 'select' && fd.type === 'select') { const miss = (df.options || []).filter(o => !(fd.options || []).includes(o)); if (miss.length) { ch = true; return { ...fd, options: [...(fd.options || []), ...miss] }; } } return fd; });
+          for (const df of d.fields) if (!have.has(T.slug(df.key))) { fields.push(df); ch = true; }
+          if (ch) writeTab({ ...t, fields }, t.id);
+        }
+        db.kvSet('tabsRev', 2);
+      });
+    }
     if (!db.kvGet('portFieldMigrated', false)) { // v0.5: Services > Port is a port field (it can say "behind Caddy")
       db.transaction(() => { for (const t of tabList()) if (t.builtin === 'services' && t.fields.some(fd => fd.key === 'port' && fd.type === 'text')) writeTab({ ...t, fields: t.fields.map(fd => (fd.key === 'port' && fd.type === 'text' ? { ...fd, type: 'port' } : fd)) }, t.id); db.kvSet('portFieldMigrated', true); });
     }
@@ -301,7 +319,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     const tabs = tabMap();
     return everything(false, a).filter(({ row, e }) => {
       const tab = tabOfRow(row, tabs);
-      const hay = [e.title, e.subtitle, e.tags.join(' '), e.notes, e.specs.map(s => `${s.k} ${s.v}`).join(' '), e.creds.map(c => `${c.label} ${c.user} ${c.url} ${c.note || ''}`).join(' '), e.nics.map(n => `${n.label} ${n.ip} ${n.mac}`).join(' '), tab.name, ...tab.fields.filter(fd => !T.SECRET_TYPES.has(fd.type)).map(fd => e.fields[fd.key] || '')].join('\n').toLowerCase();
+      const hay = [e.title, e.subtitle, e.tags.join(' '), e.notes, e.specs.map(s => `${s.k} ${s.v}`).join(' '), e.creds.map(c => `${c.label} ${c.user} ${c.url} ${c.note || ''}`).join(' '), e.nics.map(n => `${n.label} ${n.ip} ${n.mac}`).join(' '), (e.codeSets || []).map(s => s.label).join(' '), (e.questions || []).map(q => q.q).join(' '), tab.name, ...tab.fields.filter(fd => !T.SECRET_TYPES.has(fd.type)).map(fd => e.fields[fd.key] || '')].join('\n').toLowerCase();
       return words.every(w => hay.includes(w));
     }).map(({ row }) => row.id);
   });
@@ -321,7 +339,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     const row = rowOf(id); if (!row) throw new Error('No such entry');
     const e = { ...blank(), ...openEntry(row) };
     if (!canSee(a, e)) throw new Error('No such entry');
-    const m = /^(field|cred|hist|lnk):(.+)$/.exec(String(ref || '')); if (!m) throw new Error('Nothing to reveal');
+    const m = /^(field|cred|hist|lnk|qa):(.+)$/.exec(String(ref || '')); if (!m) throw new Error('Nothing to reveal');
     let value, detail = String(ref);
     if (m[1] === 'lnk') { // the password of the entry this account signs in with
       const c = e.creds.find(x => x.id === m[2]), lrow = c && c.link && rowOf(c.link); if (!lrow || lrow.deleted) throw new Error('That linked entry is gone');
@@ -334,6 +352,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     }
     if (m[1] === 'field') value = e.fields[m[2]];
     else if (m[1] === 'cred') { const c = e.creds.find(x => x.id === m[2]); value = c && c.secret; }
+    else if (m[1] === 'qa') { const q = (e.questions || []).find(x => x.id === m[2]); value = q && q.a; }
     else { const cut = m[2].lastIndexOf(':'); const h = (e.hist[m[2].slice(0, cut)] || [])[Number(m[2].slice(cut + 1))]; value = h && h.v; detail = 'hist:' + m[2]; }
     if (!value) throw new Error('That value is empty');
     audit(a, 'reveal', row.id, detail);
@@ -373,6 +392,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       const path = []; let p = row.parent_id;
       for (let i = 0; p && i < 20; i++) { const pr = rowOf(p); if (!pr) break; path.unshift(openEntry(pr).title); p = pr.parent_id; }
       docs.push({ id: row.id, depth, title: e.title, subtitle: e.subtitle, type: tab.name, path, tags: e.tags, fields, notes: opts.notes === false ? '' : e.notes, specs: opts.notes === false ? [] : e.specs, nics: e.nics,
+        codeSets: (e.codeSets || []).map(cs => ({ label: cs.label, total: cs.codes.length, left: cs.codes.filter(c => !c.used).length, codes: withSecrets ? cs.codes.map(c => ({ c: c.c, used: !!c.used })) : null })), questions: (e.questions || []).map(q => ({ q: q.q, a: mask(q.a) })),
         accounts: e.creds.map(c => ({ label: c.label, kind: (T.ACCOUNT_KINDS.find(k => k.id === (c.kind || 'password')) || {}).label || 'Password', user: c.user, url: c.url, note: c.note || '', password: mask(c.secret), totp: mask(c.totp) })), created: row.created, updated: row.updated });
       if (opts.children) for (const k of kidsOf(row.id)) visit(k, depth + 1);
     };
@@ -473,6 +493,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     const row = rowOf(id); if (!row || row.deleted) throw new Error('No such entry');
     const tab = tabOfRow(row, tabMap()), e = { ...blank(), ...openEntry(row) }, now = Date.now();
     const copy = structuredClone(e); copy.title = `Copy of ${e.title}`.slice(0, 200); copy.changed = {}; copy.hist = {}; copy.favorite = false;
+    if (!opts.secrets) { copy.codeSets = []; for (const q of copy.questions || []) q.a = ''; } else for (const cs of copy.codeSets || []) cs.id = crypto.randomBytes(6).toString('hex');
     if (opts.secrets) { for (const k of Object.keys(copy.fields)) if (copy.fields[k]) copy.changed[k] = now; for (const c of copy.creds) { c.id = crypto.randomBytes(6).toString('hex'); if (c.secret) copy.changed['cred:' + c.id] = now; } }
     else { for (const fd of tab.fields) if (T.SECRET_TYPES.has(fd.type)) delete copy.fields[fd.key]; for (const c of copy.creds) { c.id = crypto.randomBytes(6).toString('hex'); c.secret = ''; c.totp = ''; } }
     const id2 = db.transaction(() => { const n = Number(db.run('INSERT INTO entries(tab_id, parent_id, created, updated, blob) VALUES(?,?,?,?,?)', row.tab_id, row.parent_id, now, now, EMPTY).lastInsertRowid); db.run('UPDATE entries SET blob=? WHERE id=?', vault.seal(copy, `entry/${n}`), n); return n; });
@@ -603,7 +624,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
 
   function health(a = null) {
     const c = cfg(), now = Date.now(), tabs = tabMap(), staleMs = (Number(c.staleDays) || 0) * DAY;
-    const out = { weak: [], reused: [], stale: [], expiring: [], due: [], breached: [], total: 0, passwords: 0, at: now };
+    const out = { weak: [], reused: [], stale: [], expiring: [], due: [], breached: [], lowCodes: [], total: 0, passwords: 0, at: now };
     const groups = new Map();
     for (const { row, e } of everything(false, a)) {
       out.total++;
@@ -613,11 +634,12 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
         if (!v) continue;
         out.passwords++;
         const strong = ['password', 'other'].includes(kind); // a PIN is short by nature and a recovery key is random: neither is judged on strength or reuse
-        if (kind !== 'recovery' && isBreached(v)) out.breached.push({ ...base, label });
+        if (['password', 'pin', 'other'].includes(kind) && isBreached(v)) out.breached.push({ ...base, label });
         if (strong) { const bits = T.strengthBits(v); if (bits < (Number(c.weakBits) || 50)) out.weak.push({ ...base, label, bits }); }
-        if (kind !== 'recovery' && staleMs && now - (at || row.created) > staleMs) out.stale.push({ ...base, label, days: Math.floor((now - (at || row.created)) / DAY) });
+        if (['password', 'pin', 'other', 'apppass', 'token'].includes(kind) && staleMs && now - (at || row.created) > staleMs) out.stale.push({ ...base, label, days: Math.floor((now - (at || row.created)) / DAY) });
         if (strong) { const hk = crypto.createHmac('sha256', vault.ek).update(v).digest('hex'); (groups.get(hk) || groups.set(hk, []).get(hk)).push({ ...base, label }); }
       }
+      for (const cs of e.codeSets || []) { const left = cs.codes.filter(x => !x.used).length; if (cs.codes.length && left <= (Number(c.lowCodes) >= 0 ? Number(c.lowCodes) : 2)) out.lowCodes.push({ ...base, label: cs.label, left, total: cs.codes.length }); }
       if (e.rotateDays && checks.some(c => c.v)) { // passwords the owner wants changed on a schedule
         const last = Math.max(row.created, ...checks.filter(c => c.v).map(c => c.at || row.created)), age = Math.floor((now - last) / DAY);
         if (age >= e.rotateDays) out.due.push({ ...base, label: 'passwords', days: age, every: e.rotateDays });
@@ -630,7 +652,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     let g = 0;
     for (const members of groups.values()) if (members.length > 1) { g++; for (const m of members) out.reused.push({ ...m, group: g, with: members.length - 1 }); }
     out.expiring.sort((x, y) => x.days - y.days); out.weak.sort((x, y) => x.bits - y.bits); out.stale.sort((x, y) => y.days - x.days); out.due.sort((x, y) => y.days - x.days);
-    if (!a || !a.role || a.role === 'admin') db.kvSet('healthCache', { at: now, total: out.total, weak: out.weak.length, reused: out.reused.length, stale: out.stale.length, expiring: out.expiring.length, due: out.due.length, breached: out.breached.length });
+    if (!a || !a.role || a.role === 'admin') db.kvSet('healthCache', { at: now, total: out.total, weak: out.weak.length, reused: out.reused.length, stale: out.stale.length, expiring: out.expiring.length, due: out.due.length, breached: out.breached.length, lowCodes: out.lowCodes.length });
     return out;
   }
   api('vault:health', (a) => health(a));
@@ -643,7 +665,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     return {
       state: 'unlocked', mode: st.mode, lockInMs: vault.lockInMs(), total: list.length,
       perTab: tabs.map(t => ({ id: t.id, name: t.name, icon: t.icon, n: list.filter(x => x.row.tab_id === t.id).length })),
-      health: { weak: h.weak.length, reused: h.reused.length, stale: h.stale.length, expiring: h.expiring.length, due: h.due.length, breached: h.breached.length, passwords: h.passwords },
+      health: { weak: h.weak.length, reused: h.reused.length, stale: h.stale.length, expiring: h.expiring.length, due: h.due.length, breached: h.breached.length, lowCodes: h.lowCodes.length, passwords: h.passwords },
       expiring: h.expiring.slice(0, 8),
       recent: [...list].sort((x, y) => y.row.updated - x.row.updated).slice(0, 8).map(brief),
       favorites: list.filter(x => x.e.favorite).slice(0, 12).map(brief),
@@ -651,7 +673,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     };
   }, { data: false });
   // Home Assistant status: counts only, from the last time the vault was open. Never any content.
-  api('data:status', () => { const st = vault.status(), c = db.kvGet('healthCache', {}) || {}; return { app: meta.name, state: st.state, entries: c.total ?? null, weak: c.weak ?? null, reused: c.reused ?? null, stale: c.stale ?? null, expiring: c.expiring ?? null, due: c.due ?? null, breached: c.breached ?? null, checked_at: c.at ? new Date(c.at).toISOString() : null }; }, { data: false });
+  api('data:status', () => { const st = vault.status(), c = db.kvGet('healthCache', {}) || {}; return { app: meta.name, state: st.state, entries: c.total ?? null, weak: c.weak ?? null, reused: c.reused ?? null, stale: c.stale ?? null, expiring: c.expiring ?? null, due: c.due ?? null, breached: c.breached ?? null, low_codes: c.lowCodes ?? null, checked_at: c.at ? new Date(c.at).toISOString() : null }; }, { data: false });
   api('vault:audit', (a, limit = 300) => {
     const titles = new Map(); const tabs = tabMap();
     for (const { row, e } of everything().concat(everything(true))) titles.set(row.id, { title: e.title, tab: tabOfRow(row, tabs).name });
@@ -692,6 +714,47 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     audit(a, 'backup_downloaded');
     return { name: `strongbox-${stamp}.db`, base64: fs.readFileSync(file).toString('base64') };
   }, { data: false });
+
+  // ---- backup codes: sets of one-time codes you tick off as you use them ---------------------------------
+  // A set is { id, label, created, codes: [{ c, used: null | time }] }. The page sees a set's size and how many are left,
+  // never the codes, until codes:reveal (which is logged like any other look at a secret).
+  const parseCodes = (text) => {
+    const t = String(text || '');
+    const parts = /[\r\n,;]/.test(t) ? t.split(/[\r\n,;]+/) : t.split(/\s+/); // one per line; a single line is split on spaces
+    const seen = new Set(), out = [];
+    for (let c of parts) { c = c.trim(); if (!c || c.length > 128 || seen.has(c)) continue; seen.add(c); out.push({ c, used: null }); }
+    return out.slice(0, 200);
+  };
+  function withEntry(a, id, fn, action) {
+    const row = rowOf(id); if (!row || row.deleted) throw new Error('No such entry');
+    const e = { ...blank(), ...openEntry(row) }; if (!canSee(a, e)) throw new Error('No such entry');
+    const r = fn(e, row);
+    db.run('UPDATE entries SET blob=?, updated=? WHERE id=?', vault.seal(e, `entry/${row.id}`), Date.now(), row.id);
+    audit(a, action, row.id); changed({ id: row.id });
+    return r === undefined ? present(row.id, a) : r;
+  }
+  const setOf = (e, setId) => { const cs = (e.codeSets || []).find(x => x.id === setId); if (!cs) throw new Error('No such set of codes'); return cs; };
+  api('codes:add', (a, id, label, text) => withEntry(a, id, (e) => {
+    const codes = parseCodes(text); if (!codes.length) throw new Error('No codes found. Paste them one per line.');
+    if ((e.codeSets || []).length >= 20) throw new Error('An entry can hold 20 sets of codes');
+    (e.codeSets = e.codeSets || []).push({ id: crypto.randomBytes(6).toString('hex'), label: clip(label, 80).trim() || 'Backup codes', created: Date.now(), codes });
+  }, 'codes_added'));
+  api('codes:replace', (a, id, setId, text) => withEntry(a, id, (e) => { const cs = setOf(e, setId), codes = parseCodes(text); if (!codes.length) throw new Error('No codes found. Paste them one per line.'); cs.codes = codes; cs.created = Date.now(); }, 'codes_replaced'));
+  api('codes:rename', (a, id, setId, label) => withEntry(a, id, (e) => { setOf(e, setId).label = clip(label, 80).trim() || 'Backup codes'; }, 'codes_renamed'));
+  api('codes:delete', (a, id, setId) => withEntry(a, id, (e) => { setOf(e, setId); e.codeSets = e.codeSets.filter(x => x.id !== setId); }, 'codes_deleted'));
+  api('codes:mark', (a, id, setId, index, used) => withEntry(a, id, (e) => { const cs = setOf(e, setId), cd = cs.codes[Number(index)]; if (!cd) throw new Error('No such code'); cd.used = used ? Date.now() : null; return { left: cs.codes.filter(x => !x.used).length, total: cs.codes.length }; }, 'codes_marked'));
+  api('codes:reveal', (a, id, setId) => {
+    denyReveal(a);
+    const row = rowOf(id); if (!row || row.deleted) throw new Error('No such entry');
+    const e = { ...blank(), ...openEntry(row) }; if (!canSee(a, e)) throw new Error('No such entry');
+    const cs = setOf(e, setId); audit(a, 'reveal', row.id, `codes:${setId}`);
+    return { label: cs.label, codes: cs.codes.map(x => ({ c: x.c, used: x.used })) };
+  });
+  // The first unused code, copied by the page and ticked off in one step.
+  api('codes:next', (a, id, setId) => {
+    denyReveal(a);
+    return withEntry(a, id, (e) => { const cs = setOf(e, setId), cd = cs.codes.find(x => !x.used); if (!cd) throw new Error('Every code in this set is used up'); cd.used = Date.now(); return { code: cd.c, left: cs.codes.filter(x => !x.used).length, total: cs.codes.length }; }, 'codes_used');
+  });
 
   // ---- bulk actions ------------------------------------------------------------------------
   api('entries:bulk', (a, ids, action, arg) => {

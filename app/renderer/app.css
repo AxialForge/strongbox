@@ -130,6 +130,13 @@ button.ghost:hover { color: var(--accent); transform: none; }
 .acct-head { margin-bottom: 4px; }
 .acct .kv td:first-child { width: 90px; }
 
+.codeset { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; background: color-mix(in srgb, var(--bg) 70%, var(--panel)); }
+.codegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; margin-top: 10px; }
+.codechip { display: flex; align-items: center; justify-content: space-between; gap: 4px; border: 1px solid var(--line); border-radius: 10px; padding: 4px 6px 4px 10px; background: var(--panel2); }
+.codechip .mono { font-size: 13px; letter-spacing: .5px; user-select: all; }
+.codechip.used { opacity: .5; } .codechip.used .mono { text-decoration: line-through; }
+.qarow { margin-bottom: 8px; } .qarow input { min-width: 0; }
+
 /* ---- editor ---- */
 .secretin { display: grid; gap: 6px; min-width: 0; }
 .secretin input, .secretin textarea { width: 100%; }

@@ -8,6 +8,8 @@
 // a notification, an audit row or a list: secrets leave this file only through entries:reveal / entries:totp.
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
+const { DatabaseSync } = require('node:sqlite');
 const { createCore } = require('../../kit/main/core');
 const { totp, base32Decode } = require('../../kit/server/totp');
 const meta = require('../app.json');
@@ -40,6 +42,15 @@ CREATE TABLE IF NOT EXISTS prefs (
   k     TEXT PRIMARY KEY,
   blob  BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS files (
+  id        INTEGER PRIMARY KEY,
+  entry_id  INTEGER NOT NULL,
+  created   INTEGER NOT NULL,
+  size      INTEGER NOT NULL,
+  meta      BLOB NOT NULL,
+  data      BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS files_entry ON files(entry_id);
 CREATE TABLE IF NOT EXISTS vault_audit (
   id        INTEGER PRIMARY KEY,
   ts        INTEGER NOT NULL,
@@ -54,7 +65,7 @@ CREATE TABLE IF NOT EXISTS vault_audit (
 const MIGRATIONS = [];
 
 const DEFAULTS = {
-  vault: { autoLockMinutes: 15, clipboardClearSeconds: 30, revealSeconds: 20, staleDays: 365, weakBits: 50, expiringDays: 60, trashDays: 30, kdfLog2N: 17, genPresets: [] },
+  vault: { autoLockMinutes: 15, clipboardClearSeconds: 30, revealSeconds: 20, staleDays: 365, weakBits: 50, expiringDays: 60, trashDays: 30, kdfLog2N: 17, genPresets: [], noReveal: [], emergencyNote: '' },
   backup: { time: '03:30' },
   notify: { events: { unlockFailed: true, dailySummary: false } },
 };
@@ -63,7 +74,7 @@ const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
 const EMPTY = Buffer.alloc(0);
 
 function createService({ dataDir, log = () => {}, send = () => {} }) {
-  const core = createCore({ app: meta, dataDir, log, send, defaults: DEFAULTS, schema: SCHEMA, migrations: MIGRATIONS, counts: ['entries', 'tabs'] });
+  const core = createCore({ app: meta, dataDir, log, send, defaults: DEFAULTS, schema: SCHEMA, migrations: MIGRATIONS, counts: ['entries', 'tabs', 'files'] });
   const { db, settings, notify } = core;
   const cfg = () => settings.get().vault;
   const vault = new Vault({ db, log, send, settings: cfg });
@@ -84,7 +95,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   const tabMap = () => new Map(tabList().map(t => [t.id, t]));
   const rowOf = (id) => db.get('SELECT * FROM entries WHERE id=?', Number(id));
   const openEntry = (r) => vault.open(r.blob, `entry/${r.id}`);
-  const blank = () => ({ title: '', subtitle: '', fields: {}, creds: [], specs: [], nics: [], notes: '', tags: [], favorite: false, changed: {}, hist: {} });
+  const blank = () => ({ title: '', subtitle: '', fields: {}, creds: [], specs: [], nics: [], notes: '', tags: [], favorite: false, rotateDays: 0, changed: {}, hist: {} });
   /** Everything not in the trash, decrypted: [{ row, e }]. */
   const everything = (trash = false) => db.all(`SELECT * FROM entries WHERE deleted IS ${trash ? 'NOT ' : ''}NULL ORDER BY id`).map(row => ({ row, e: { ...blank(), ...openEntry(row) } }));
   const tabOfRow = (row, tabs) => tabs.get(row.tab_id) || { id: row.tab_id, name: '(missing tab)', icon: '?', fields: [] };
@@ -101,7 +112,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   };
   // The secret a row's copy button copies: the first password that is set, else the first login's.
   const quickRef = (e, tab) => { const fd = tab.fields.find(f => f.type === 'password' && e.fields[f.key]); if (fd) return 'field:' + fd.key; const c = e.creds.find(x => x.secret); return c ? 'cred:' + c.id : null; };
-  const light = (row, e, tab) => ({ id: row.id, tabId: row.tab_id, parentId: row.parent_id, title: e.title, subtitle: e.subtitle, tags: e.tags, favorite: !!e.favorite, created: row.created, updated: row.updated, fields: plainFields(e, tab, false), accounts: e.creds.length, quick: quickRef(e, tab) });
+  const light = (row, e, tab) => ({ id: row.id, tabId: row.tab_id, parentId: row.parent_id, title: e.title, subtitle: e.subtitle, tags: e.tags, favorite: !!e.favorite, created: row.created, updated: row.updated, fields: plainFields(e, tab, false), accounts: e.creds.length, rotateDays: e.rotateDays || 0, quick: quickRef(e, tab) });
   function full(row, e, tab) {
     const secrets = {};
     for (const fd of tab.fields) {
@@ -117,7 +128,11 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       specs: e.specs, nics: e.nics, notes: e.notes,
     };
   }
-  const present = (id) => { const row = rowOf(id); if (!row) throw new Error('No such entry'); const tabs = tabMap(); return full(row, { ...blank(), ...openEntry(row) }, tabOfRow(row, tabs)); };
+  // Standard accounts listed in settings may see entries but never passwords, keys, 2FA codes or attachments.
+  const canReveal = (a) => !(a && a.user && a.role && a.role !== 'admin' && (cfg().noReveal || []).includes(a.user));
+  const denyReveal = (a) => { if (!canReveal(a)) throw new Error('Your account can see entries but not their passwords'); };
+  const filesOf = (entryId) => db.all('SELECT id, created, size, meta FROM files WHERE entry_id=? ORDER BY id', entryId).map(r => ({ id: r.id, created: r.created, size: r.size, ...vault.open(r.meta, `filemeta/${r.id}`) }));
+  const present = (id, a) => { const row = rowOf(id); if (!row) throw new Error('No such entry'); const tabs = tabMap(); const f = full(row, { ...blank(), ...openEntry(row) }, tabOfRow(row, tabs)); f.canReveal = canReveal(a); f.files = filesOf(row.id); return f; };
 
   // ---- writing -----------------------------------------------------------------------------
   function descendants(id, deleted = false) {
@@ -171,6 +186,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     const e = { ...prev, title, subtitle: clip(input.subtitle, 200).trim(), fields: { ...prev.fields }, notes: clip(input.notes, 100000), favorite: !!input.favorite, changed: { ...prev.changed }, hist: structuredClone(prev.hist), creds: [] };
     e.tags = [...new Set((Array.isArray(input.tags) ? input.tags : []).map(t => clip(t, 40).trim().toLowerCase()).filter(Boolean))].slice(0, 30);
     e.specs = (Array.isArray(input.specs) ? input.specs : []).map(s => ({ k: clip(s.k, 60).trim(), v: clip(s.v, 300).trim() })).filter(s => s.k || s.v).slice(0, 100);
+    e.rotateDays = 'rotateDays' in input ? Math.max(0, Math.min(3650, Math.floor(Number(input.rotateDays)) || 0)) : prev.rotateDays || 0;
     e.nics = (Array.isArray(input.nics) ? input.nics : []).map(n => ({ label: clip(n.label, 60).trim(), ip: T.normIp(n.ip), mac: T.normMac(n.mac) })).filter(n => n.label || n.ip || n.mac).slice(0, 30);
     for (const fd of tab.fields) {
       if (T.SECRET_TYPES.has(fd.type)) {
@@ -262,7 +278,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   });
 
   // ---- entries -----------------------------------------------------------------------------
-  api('entries:list', () => { const tabs = tabMap(); return everything().map(({ row, e }) => light(row, e, tabOfRow(row, tabs))); });
+  api('entries:list', (a) => { const tabs = tabMap(), ok = canReveal(a); return everything().map(({ row, e }) => { const l = light(row, e, tabOfRow(row, tabs)); if (!ok) l.quick = null; return l; }); });
   api('entries:search', (a, q) => {
     const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return [];
@@ -273,8 +289,8 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       return words.every(w => hay.includes(w));
     }).map(({ row }) => row.id);
   });
-  api('entries:get', (a, id) => present(id));
-  api('entries:save', (a, input) => { const id = saveEntry(a, input); changed({ id }); return present(id); });
+  api('entries:get', (a, id) => present(id, a));
+  api('entries:save', (a, input) => { const id = saveEntry(a, input); changed({ id }); return present(id, a); });
   api('entries:move', (a, id, to = {}) => {
     const row = rowOf(id); if (!row) throw new Error('No such entry');
     const tabId = Number(to.tabId || row.tab_id);
@@ -282,9 +298,10 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     const parentId = checkParent(row.id, 'parentId' in to ? to.parentId : row.parent_id);
     db.run('UPDATE entries SET tab_id=?, parent_id=?, updated=? WHERE id=?', tabId, parentId, Date.now(), row.id);
     audit(a, 'entry_moved', row.id); changed({ id: row.id });
-    return present(row.id);
+    return present(row.id, a);
   });
   api('entries:reveal', (a, id, ref) => {
+    denyReveal(a);
     const row = rowOf(id); if (!row) throw new Error('No such entry');
     const e = { ...blank(), ...openEntry(row) };
     const m = /^(field|cred|hist):(.+)$/.exec(String(ref || '')); if (!m) throw new Error('Nothing to reveal');
@@ -297,6 +314,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     return value;
   });
   api('entries:totp', (a, id, key) => {
+    denyReveal(a);
     const row = rowOf(id); if (!row) throw new Error('No such entry');
     const e = openEntry(row), ck = String(key);
     const seed = ck.startsWith('cred:') ? ((e.creds || []).find(x => 'cred:' + x.id === ck) || {}).totp : (e.fields || {})[ck];
@@ -309,6 +327,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   });
   // Everything needed to print entries: structure and values, with secrets only when asked (each print is audited as a whole).
   api('entries:print', (a, ids, opts = {}) => {
+    if (opts.secrets) denyReveal(a);
     const withSecrets = !!opts.secrets, tabs = tabMap(), docs = [], seen = new Set();
     const kidsOf = (id) => db.all('SELECT id FROM entries WHERE parent_id=? AND deleted IS NULL ORDER BY id', id).map(r => r.id);
     const mask = (v) => (v ? (withSecrets ? v : '••••••••') : '');
@@ -355,7 +374,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   function purge(ids) {
     const all = new Set();
     for (const id of ids) { const row = rowOf(id); if (!row || !row.deleted) continue; all.add(row.id); for (const d of descendants(row.id, true)) if (rowOf(d).deleted === row.deleted) all.add(d); }
-    db.transaction(() => { for (const i of all) db.run('DELETE FROM entries WHERE id=?', i); });
+    db.transaction(() => { for (const i of all) { db.run('DELETE FROM files WHERE entry_id=?', i); db.run('DELETE FROM entries WHERE id=?', i); } });
     return all.size;
   }
   api('entries:purge', (a, ids = null) => {
@@ -430,7 +449,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     else { for (const fd of tab.fields) if (T.SECRET_TYPES.has(fd.type)) delete copy.fields[fd.key]; for (const c of copy.creds) { c.id = crypto.randomBytes(6).toString('hex'); c.secret = ''; c.totp = ''; } }
     const id2 = db.transaction(() => { const n = Number(db.run('INSERT INTO entries(tab_id, parent_id, created, updated, blob) VALUES(?,?,?,?,?)', row.tab_id, row.parent_id, now, now, EMPTY).lastInsertRowid); db.run('UPDATE entries SET blob=? WHERE id=?', vault.seal(copy, `entry/${n}`), n); return n; });
     audit(a, 'entry_created', id2, `copy of #${row.id}${opts.secrets ? ' with passwords' : ''}`); changed({ id: id2 });
-    return present(id2);
+    return present(id2, a);
   });
 
   // ---- tags, entry templates, network overview (small encrypted preferences) ----------------------
@@ -511,9 +530,52 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   });
 
   // ---- health, dashboard, audit ------------------------------------------------------------
+  // ---- breached passwords: a built-in list of the most common ones, plus an optional list you load ----
+  const COMMON = ['123456','password','12345678','qwerty','123456789','12345','1234','111111','1234567','dragon','123123','baseball','abc123','football','monkey','letmein','696969','shadow','master','666666','qwertyuiop','123321','mustang','1234567890','michael','654321','superman','1qaz2wsx','7777777','121212','000000','qazwsx','123qwe','killer','trustno1','jordan','jennifer','zxcvbnm','asdfgh','hunter','buster','soccer','harley','batman','andrew','tigger','sunshine','iloveyou','2000','charlie','robert','thomas','hockey','ranger','daniel','starwars','112233','george','computer','michelle','jessica','pepper','1111','zxcvbn','555555','11111111','131313','freedom','777777','pass','maggie','159753','aaaaaa','ginger','princess','joshua','cheese','amanda','summer','love','ashley','nicole','chelsea','biteme','matthew','access','yankees','987654321','dallas','austin','thunder','taylor','matrix','admin','welcome','login','passw0rd','password1','password123','admin123','root','toor','changeme','default','qwerty123','letmein123','football1','iloveyou1','ubnt','raspberry','administrator','guest','user','test','1q2w3e4r','1q2w3e','abcd1234','p@ssw0rd','Password1','Welcome1','Passw0rd','P@ssw0rd','admin1234','12341234','password12','qwer1234','sunshine1','master123','superman1','trustno1!','raspberrypi','homeassistant','synology','ubiquiti','netgear','linksys','cisco','public','private','secret'];
+  const sha8 = (pw) => crypto.createHash('sha1').update(String(pw)).digest().readBigUInt64BE(0);
+  const commonSet = new Set(COMMON.map(sha8));
+  const breachFile = path.join(dataDir, 'breached.bin');
+  let breachCache = null;
+  const loadBreach = () => {
+    if (breachCache) return breachCache;
+    try { const b = fs.readFileSync(breachFile), ab = new ArrayBuffer(b.length - (b.length % 8)); new Uint8Array(ab).set(b.subarray(0, ab.byteLength)); breachCache = new BigUint64Array(ab); } catch { breachCache = new BigUint64Array(0); }
+    return breachCache;
+  };
+  function isBreached(pw) {
+    const h = sha8(pw); if (commonSet.has(h)) return true;
+    const arr = loadBreach(); let lo = 0, hi = arr.length - 1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (arr[mid] === h) return true; if (arr[mid] < h) lo = mid + 1; else hi = mid - 1; }
+    return false;
+  }
+  // Accepts a list of passwords, or Have I Been Pwned style lines (SHA-1:count). Only 64 bits of each hash are kept, in a sorted file.
+  const breach = {
+    load(a, buf) {
+      let cap = 1 << 20, arr = new BigUint64Array(cap), n = 0;
+      const text = Buffer.from(buf).toString('utf8');
+      for (let start = 0; start < text.length;) {
+        let end = text.indexOf('\n', start); if (end < 0) end = text.length;
+        const line = text.slice(start, end).replace(/\r$/, ''); start = end + 1;
+        if (!line) continue;
+        const m = /^([0-9a-fA-F]{40})(?::\d+)?$/.exec(line);
+        let h; if (m) h = BigInt('0x' + m[1].slice(0, 16)); else if (line.length <= 128) h = sha8(line); else continue;
+        if (n === cap) { cap *= 2; if (cap > 2 ** 25) throw new Error('That list is too long (the limit is about 30 million entries)'); const g = new BigUint64Array(cap); g.set(arr); arr = g; }
+        arr[n++] = h;
+      }
+      if (!n) throw new Error('No passwords or hashes found in that file');
+      const sorted = arr.slice(0, n).sort(); let u = 0;
+      for (let i = 0; i < sorted.length; i++) if (i === 0 || sorted[i] !== sorted[i - 1]) sorted[u++] = sorted[i];
+      const out = sorted.slice(0, u);
+      fs.writeFileSync(breachFile + '.tmp', Buffer.from(out.buffer, out.byteOffset, out.byteLength), { mode: 0o600 }); fs.renameSync(breachFile + '.tmp', breachFile);
+      breachCache = out; audit(a, 'breach_list_loaded', null, `${u} entries`);
+      return { count: u };
+    },
+  };
+  api('breach:status', () => ({ builtin: COMMON.length, custom: loadBreach().length, at: (() => { try { return fs.statSync(breachFile).mtimeMs; } catch { return null; } })() }), { data: false });
+  api('breach:clear', (a) => { try { fs.unlinkSync(breachFile); } catch { /* none */ } breachCache = null; audit(a, 'breach_list_cleared'); return { builtin: COMMON.length, custom: 0, at: null }; }, { data: false });
+
   function health() {
     const c = cfg(), now = Date.now(), tabs = tabMap(), staleMs = (Number(c.staleDays) || 0) * DAY;
-    const out = { weak: [], reused: [], stale: [], expiring: [], total: 0, passwords: 0, at: now };
+    const out = { weak: [], reused: [], stale: [], expiring: [], due: [], breached: [], total: 0, passwords: 0, at: now };
     const groups = new Map();
     for (const { row, e } of everything()) {
       out.total++;
@@ -522,11 +584,16 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       for (const { label, v, at } of checks) {
         if (!v) continue;
         out.passwords++;
+        if (isBreached(v)) out.breached.push({ ...base, label });
         const bits = T.strengthBits(v);
         if (bits < (Number(c.weakBits) || 50)) out.weak.push({ ...base, label, bits });
         if (staleMs && now - (at || row.created) > staleMs) out.stale.push({ ...base, label, days: Math.floor((now - (at || row.created)) / DAY) });
         const hk = crypto.createHmac('sha256', vault.ek).update(v).digest('hex');
         (groups.get(hk) || groups.set(hk, []).get(hk)).push({ ...base, label });
+      }
+      if (e.rotateDays && checks.some(c => c.v)) { // passwords the owner wants changed on a schedule
+        const last = Math.max(row.created, ...checks.filter(c => c.v).map(c => c.at || row.created)), age = Math.floor((now - last) / DAY);
+        if (age >= e.rotateDays) out.due.push({ ...base, label: 'passwords', days: age, every: e.rotateDays });
       }
       for (const fd of tab.fields) if (fd.type === 'date' && fd.expiry && e.fields[fd.key]) {
         const days = Math.ceil((Date.parse(e.fields[fd.key] + 'T00:00:00') - now) / DAY);
@@ -535,8 +602,8 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     }
     let g = 0;
     for (const members of groups.values()) if (members.length > 1) { g++; for (const m of members) out.reused.push({ ...m, group: g, with: members.length - 1 }); }
-    out.expiring.sort((x, y) => x.days - y.days); out.weak.sort((x, y) => x.bits - y.bits); out.stale.sort((x, y) => y.days - x.days);
-    db.kvSet('healthCache', { at: now, total: out.total, weak: out.weak.length, reused: out.reused.length, stale: out.stale.length, expiring: out.expiring.length });
+    out.expiring.sort((x, y) => x.days - y.days); out.weak.sort((x, y) => x.bits - y.bits); out.stale.sort((x, y) => y.days - x.days); out.due.sort((x, y) => y.days - x.days);
+    db.kvSet('healthCache', { at: now, total: out.total, weak: out.weak.length, reused: out.reused.length, stale: out.stale.length, expiring: out.expiring.length, due: out.due.length, breached: out.breached.length });
     return out;
   }
   api('vault:health', () => health());
@@ -549,7 +616,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     return {
       state: 'unlocked', mode: st.mode, lockInMs: vault.lockInMs(), total: list.length,
       perTab: tabs.map(t => ({ id: t.id, name: t.name, icon: t.icon, n: list.filter(x => x.row.tab_id === t.id).length })),
-      health: { weak: h.weak.length, reused: h.reused.length, stale: h.stale.length, expiring: h.expiring.length, passwords: h.passwords },
+      health: { weak: h.weak.length, reused: h.reused.length, stale: h.stale.length, expiring: h.expiring.length, due: h.due.length, breached: h.breached.length, passwords: h.passwords },
       expiring: h.expiring.slice(0, 8),
       recent: [...list].sort((x, y) => y.row.updated - x.row.updated).slice(0, 8).map(brief),
       favorites: list.filter(x => x.e.favorite).slice(0, 12).map(brief),
@@ -557,7 +624,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     };
   }, { data: false });
   // Home Assistant status: counts only, from the last time the vault was open. Never any content.
-  api('data:status', () => { const st = vault.status(), c = db.kvGet('healthCache', {}) || {}; return { app: meta.name, state: st.state, entries: c.total ?? null, weak: c.weak ?? null, reused: c.reused ?? null, stale: c.stale ?? null, expiring: c.expiring ?? null, checked_at: c.at ? new Date(c.at).toISOString() : null }; }, { data: false });
+  api('data:status', () => { const st = vault.status(), c = db.kvGet('healthCache', {}) || {}; return { app: meta.name, state: st.state, entries: c.total ?? null, weak: c.weak ?? null, reused: c.reused ?? null, stale: c.stale ?? null, expiring: c.expiring ?? null, due: c.due ?? null, breached: c.breached ?? null, checked_at: c.at ? new Date(c.at).toISOString() : null }; }, { data: false });
   api('vault:audit', (a, limit = 300) => {
     const titles = new Map(); const tabs = tabMap();
     for (const { row, e } of everything().concat(everything(true))) titles.set(row.id, { title: e.title, tab: tabOfRow(row, tabs).name });
@@ -568,7 +635,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   api('vault:status', () => vault.status(), { data: false });
   api('vault:touch', () => { if (vault.unlocked) vault.touch(); return vault.status(); }, { data: false });
   api('vault:create', async (a, opts = {}) => {
-    const r = await vault.create({ mode: opts.mode, password: opts.password, recovery: opts.recovery !== false });
+    const r = await vault.create({ mode: opts.mode, password: opts.password, recovery: opts.recovery !== false, securityKey: opts.securityKey });
     seedTabs(); audit(a, 'vault_created', null, opts.mode); changed();
     return r;
   }, { data: false });
@@ -585,11 +652,11 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     return vault.status();
   }, { data: false });
   api('vault:lock', (a) => { if (vault.lock('manual')) audit(a, 'lock'); return vault.status(); }, { data: false });
-  api('vault:rewrap', async (a, opts = {}) => { const r = await vault.rewrap({ mode: opts.mode, password: opts.password, recovery: opts.recovery || 'keep' }); audit(a, 'unlock_method_changed', null, opts.mode); changed(); return r; }, { data: false });
+  api('vault:rewrap', async (a, opts = {}) => { const r = await vault.rewrap({ mode: opts.mode, password: opts.password, recovery: opts.recovery || 'keep', securityKey: opts.securityKey }); audit(a, 'unlock_method_changed', null, opts.mode); changed(); return r; }, { data: false });
   api('vault:newRecovery', async (a) => { const r = await vault.newRecovery(); audit(a, 'recovery_key_renewed'); return r; }, { data: false });
   api('vault:resetEmpty', (a) => {
     if (db.get('SELECT COUNT(*) n FROM entries').n) throw new Error('The vault holds entries; a reset would destroy them. Restore from a backup instead.');
-    db.transaction(() => { db.run('DELETE FROM tabs'); db.run('DELETE FROM prefs'); db.run('DELETE FROM vault_meta'); db.run("DELETE FROM kv WHERE k='seededTabs'"); });
+    db.transaction(() => { db.run('DELETE FROM tabs'); db.run('DELETE FROM files'); db.run('DELETE FROM prefs'); db.run('DELETE FROM vault_meta'); db.run("DELETE FROM kv WHERE k='seededTabs'"); });
     vault.lock('reset'); audit(a, 'vault_reset'); changed();
     return true;
   }, { data: false });
@@ -599,6 +666,107 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     return { name: `strongbox-${stamp}.db`, base64: fs.readFileSync(file).toString('base64') };
   }, { data: false });
 
+  // ---- bulk actions ------------------------------------------------------------------------
+  api('entries:bulk', (a, ids, action, arg) => {
+    ids = [...new Set((Array.isArray(ids) ? ids : []).map(Number))].slice(0, 1000);
+    const tabs = tabMap(), now = Date.now(); let n = 0;
+    const tag = clip(arg, 40).trim().toLowerCase();
+    if (action === 'move' && !tabs.has(Number(arg && arg.tabId))) throw new Error('No such type');
+    if (!['delete', 'move', 'addTag', 'removeTag', 'favorite'].includes(action)) throw new Error('Unknown bulk action');
+    db.transaction(() => {
+      for (const id of ids) {
+        const row = rowOf(id); if (!row || row.deleted) continue;
+        if (action === 'delete') { for (const i of [row.id, ...descendants(row.id)]) db.run('UPDATE entries SET deleted=? WHERE id=?', now, i); n++; continue; }
+        if (action === 'move') { db.run('UPDATE entries SET tab_id=?, updated=? WHERE id=?', Number(arg.tabId), now, row.id); n++; continue; }
+        const e = { ...blank(), ...openEntry(row) }; let ch = false;
+        if (action === 'addTag' && tag && !e.tags.includes(tag) && e.tags.length < 30) { e.tags.push(tag); ch = true; }
+        else if (action === 'removeTag' && e.tags.includes(tag)) { e.tags = e.tags.filter(x => x !== tag); ch = true; }
+        else if (action === 'favorite' && e.favorite !== !!arg) { e.favorite = !!arg; ch = true; }
+        if (ch) { db.run('UPDATE entries SET blob=?, updated=? WHERE id=?', vault.seal(e, `entry/${row.id}`), now, row.id); n++; }
+      }
+    });
+    audit(a, 'bulk_' + action, null, `${n} entr${n === 1 ? 'y' : 'ies'}`); changed();
+    return n;
+  });
+
+  // ---- attachments (encrypted like everything else; uploaded and downloaded through raw routes) ---
+  const MAX_FILE = 10 * 1024 * 1024, MAX_FILES = 30;
+  const files = {
+    add(a, entryId, name, type, buf) {
+      vault.require();
+      const row = rowOf(entryId); if (!row || row.deleted) throw new Error('No such entry');
+      if (!buf || !buf.length) throw new Error('That file is empty');
+      if (buf.length > MAX_FILE) throw new Error('Attachments can be at most 10 MB');
+      if (db.get('SELECT COUNT(*) n FROM files WHERE entry_id=?', row.id).n >= MAX_FILES) throw new Error(`An entry can hold ${MAX_FILES} attachments`);
+      const id = db.transaction(() => {
+        const n = Number(db.run('INSERT INTO files(entry_id, created, size, meta, data) VALUES(?,?,?,?,?)', row.id, Date.now(), buf.length, EMPTY, EMPTY).lastInsertRowid);
+        db.run('UPDATE files SET meta=?, data=? WHERE id=?', vault.seal({ name: clip(name, 200) || 'file', type: clip(type, 100) || 'application/octet-stream' }, `filemeta/${n}`), vault.sealBytes(buf, `file/${n}`), n);
+        return n;
+      });
+      audit(a, 'file_added', row.id, `file ${id}, ${buf.length} bytes`); changed({ id: row.id });
+      return filesOf(row.id);
+    },
+    read(a, id) {
+      vault.require(); denyReveal(a);
+      const r = db.get('SELECT * FROM files WHERE id=?', Number(id)); if (!r) throw new Error('No such file');
+      audit(a, 'file_downloaded', r.entry_id, `file ${r.id}`);
+      return { ...vault.open(r.meta, `filemeta/${r.id}`), data: vault.openBytes(r.data, `file/${r.id}`) };
+    },
+  };
+  api('files:delete', (a, id) => {
+    const r = db.get('SELECT entry_id FROM files WHERE id=?', Number(id)); if (!r) throw new Error('No such file');
+    db.run('DELETE FROM files WHERE id=?', Number(id)); audit(a, 'file_deleted', r.entry_id, `file ${id}`); changed({ id: r.entry_id });
+    return filesOf(r.entry_id);
+  });
+
+  // ---- restore a backup, rotate the data key ----------------------------------------------------
+  api('vault:restoreCheck', () => true, { data: false }); // SENSITIVE: makes the browser ask for the account password before the upload
+  function restoreFile(a, buf) {
+    if (!buf || buf.length < 4096 || buf.subarray(0, 15).toString('latin1') !== 'SQLite format 3') throw new Error('That is not a Strongbox backup (it is not a database file)');
+    const tmp = path.join(dataDir, `restore-${Date.now()}.db`);
+    fs.writeFileSync(tmp, buf, { mode: 0o600 });
+    let info;
+    try {
+      const probe = new DatabaseSync(tmp, { readOnly: true });
+      try {
+        const have = new Set(probe.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name));
+        for (const t of ['vault_meta', 'tabs', 'entries']) if (!have.has(t)) throw new Error('That is not a Strongbox backup (no ' + t + ' table)');
+        const row = probe.prepare("SELECT v FROM vault_meta WHERE k='header'").get();
+        const header = row ? JSON.parse(row.v) : null;
+        if (!header || !header.dk || !header.kdf) throw new Error('That backup has no vault in it');
+        info = { have, mode: header.mode, keyFileId: header.kf || null, securityKey: !!header.sk, entries: probe.prepare('SELECT COUNT(*) n FROM entries').get().n, tabs: probe.prepare('SELECT COUNT(*) n FROM tabs').get().n };
+      } finally { probe.close(); }
+      db.backup('pre-restore');
+      vault.lock('restore');
+      db.exec(`ATTACH DATABASE '${tmp.replace(/'/g, "''")}' AS bk`);
+      try {
+        db.transaction(() => {
+          for (const t of ['tabs', 'entries', 'vault_meta', 'files', 'prefs']) db.exec(`DELETE FROM ${t}`);
+          db.exec('INSERT INTO vault_meta SELECT k, v FROM bk.vault_meta');
+          db.exec('INSERT INTO tabs SELECT id, sort, blob FROM bk.tabs');
+          db.exec('INSERT INTO entries SELECT id, tab_id, parent_id, created, updated, deleted, blob FROM bk.entries');
+          if (info.have.has('prefs')) db.exec('INSERT INTO prefs SELECT k, blob FROM bk.prefs');
+          if (info.have.has('files')) db.exec('INSERT INTO files SELECT id, entry_id, created, size, meta, data FROM bk.files');
+          db.exec("DELETE FROM kv WHERE k IN ('seededTabs', 'portFieldMigrated')");
+          if (info.have.has('kv')) db.exec("INSERT INTO kv SELECT k, v FROM bk.kv WHERE k IN ('seededTabs', 'portFieldMigrated')");
+        });
+      } finally { db.exec('DETACH DATABASE bk'); }
+    } finally { try { fs.unlinkSync(tmp); } catch { /* ignore */ } }
+    audit(a, 'backup_restored', null, `${info.entries} entries, ${info.tabs} types`); changed();
+    return { entries: info.entries, tabs: info.tabs, mode: info.mode, keyFileId: info.keyFileId, securityKey: info.securityKey };
+  }
+  api('vault:rotate', async (a, opts = {}) => {
+    db.backup('pre-rotate');
+    const r = await vault.rotate({ mode: opts.mode, password: opts.password, recovery: opts.recovery === 'none' ? 'none' : 'new', securityKey: opts.securityKey }, (open, seal) => {
+      for (const t of db.all('SELECT id, blob FROM tabs')) db.run('UPDATE tabs SET blob=? WHERE id=?', seal(open(t.blob, `tab/${t.id}`), `tab/${t.id}`), t.id);
+      for (const e of db.all('SELECT id, blob FROM entries')) db.run('UPDATE entries SET blob=? WHERE id=?', seal(open(e.blob, `entry/${e.id}`), `entry/${e.id}`), e.id);
+      for (const p of db.all('SELECT k, blob FROM prefs')) db.run('UPDATE prefs SET blob=? WHERE k=?', seal(open(p.blob, `pref/${p.k}`), `pref/${p.k}`), p.k);
+      for (const f of db.all('SELECT id, meta, data FROM files')) db.run('UPDATE files SET meta=?, data=? WHERE id=?', seal(open(f.meta, `filemeta/${f.id}`), `filemeta/${f.id}`), seal(open(f.data, `file/${f.id}`), `file/${f.id}`), f.id);
+    });
+    audit(a, 'data_key_rotated', null, opts.mode); changed();
+    return r;
+  }, { data: false });
+
   // ---- jobs --------------------------------------------------------------------------------
   core.every('autolock', 15000, () => { if (vault.unlocked && vault.lockInMs() === 0) { vault.lock('idle'); audit(null, 'autolock'); } });
   core.daily('backup', () => settings.get().backup.time, () => { const dest = db.backup('nightly'); log('backup: ' + dest); });
@@ -606,11 +774,11 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   core.daily('summary', () => settings.get().notify.dailyTime, () => {
     if (!settings.get().notify.events.dailySummary) return;
     const c = db.kvGet('healthCache', null); if (!c) return;
-    notify('dailySummary', 'Strongbox summary', `${c.total} entries · ${c.weak} weak, ${c.reused} reused, ${c.stale} old passwords · ${c.expiring} expiring soon (as of the last time the vault was open).`);
+    notify('dailySummary', 'Strongbox summary', `${c.total} entries · ${c.weak} weak, ${c.reused} reused, ${c.stale} old passwords · ${c.expiring} expiring soon${c.due ? ` · ${c.due} due to be changed` : ''}${c.breached ? ` · ${c.breached} known-breached` : ''} (as of the last time the vault was open).`);
   });
 
   const shutdown = () => { vault.lock('shutdown'); core.shutdown(); };
-  return { ...core, shutdown, vault, api: API, LOCKED };
+  return { ...core, shutdown, vault, api: API, LOCKED, files, restoreFile, breach };
 }
 
 module.exports = { createService, LOCKED, DEFAULTS };

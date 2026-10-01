@@ -106,6 +106,11 @@ h3 .eicon { width: 26px; height: 26px; font-size: 13px; border-radius: 8px; }
 .eact { display: flex; gap: 4px; flex: none; }
 .eact a { display: contents; }
 
+.bulkbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 10px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 14px; background: color-mix(in srgb, var(--accent) 9%, var(--panel)); position: sticky; top: 0; z-index: 5; backdrop-filter: blur(8px); }
+.bulkbar .grow { flex: 1; }
+.erow.picked { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.rowsel { width: 17px; height: 17px; flex: none; }
+
 /* ---- entry page ---- */
 .crumbs { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
 .stack { display: grid; gap: 14px; align-content: start; }

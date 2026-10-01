@@ -7,6 +7,7 @@ A LAN-only, locally encrypted vault for hardware, website, e-mail and key creden
 - **Types you define**: Hardware, Services, Websites, E-mail and Keys & licences to start; add your own with their own fields.
 - **Nested entries**: a server holds its VMs, and a service (MediaLedger, Plex…) nests under the hardware it runs on.
 - **Templates** (built in, or saved from any entry), **coloured tags**, **IP and MAC addresses** with extra network interfaces and a network table.
+- **Safety net**: restore a backup from the app, rotate the encryption key, attachments, an emergency sheet, rotation reminders, a known-breached password check, read-only accounts, Wi-Fi QR codes, bulk actions.
 - **Password generator** with presets and requirements (length, required kinds of characters, the symbols a device allows).
 - **Specs and notes** on every entry, tags, favorites, extra logins, password history, live authenticator codes.
 - **Unlock like a Synology volume**: a passphrase, a key file, or both, plus an optional recovery key. Auto-locks when idle; a reboot locks it.

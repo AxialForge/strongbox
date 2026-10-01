@@ -10,23 +10,24 @@
     'password+keyfile': ['Passphrase + key file', 'Recommended. Opening the vault needs something you know and something you hold, like a Synology volume with a key file. A stolen Pi, SD card or backup is useless without both.'],
     password: ['Passphrase only', 'One long passphrase. Simple, and fine if it is truly long and unique. Nothing to lose but nothing to hold either.'],
     keyfile: ['Key file only', 'A file you keep off the Pi (a USB stick). Anyone who gets the file can open the vault, so protect it like a physical key.'],
+    'password+securitykey': ['Passphrase + hardware security key (experimental)', 'A YubiKey or similar: you touch the key to unlock. Needs HTTPS and a key with the hmac-secret (WebAuthn PRF) feature. The key is tied to the web address you set it up on, so keep the recovery key safe.'],
   };
   const modeName = (m) => (MODE_TEXT[m] || [m])[0];
-  const needsPw = (m) => m !== 'keyfile', needsKf = (m) => m !== 'password';
+  const needsPw = (m) => m !== 'keyfile', needsKf = (m) => m === 'password+keyfile' || m === 'keyfile', needsSk = (m) => m === 'password+securitykey';
 
   // ---------- the setup / change wizard --------------------------------------------------------------
   /** Draws the wizard into `box`. opts: { change, hasRecovery, run(opts) → { keyFile, keyFileId, recoveryKey }, done() } */
   function wizard(box, opts) {
-    let mode = 'password+keyfile', recovery = opts.change ? (opts.hasRecovery ? 'keep' : 'none') : 'new';
+    let mode = 'password+keyfile', recovery = opts.rotate ? 'new' : opts.change ? (opts.hasRecovery ? 'keep' : 'none') : 'new';
     // While the wizard is up, vault events must not re-draw the page: the key file and recovery key are shown once, on step 3.
     SB.wizardActive = true;
     const finish = () => { SB.wizardActive = false; };
     const step1 = () => {
-      box.innerHTML = `<h2>${opts.change ? 'Change how the vault unlocks' : 'Set up your vault'}</h2>
-        <p class="muted">${opts.change ? 'The entries are not re-encrypted; only the lock around the key changes. The current method stops working at once.' : 'Choose what it takes to open it. Everything inside is encrypted with a random key that this lock protects; the Pi never stores it in the clear.'}</p>
-        <div class="modecards">${Object.entries(MODE_TEXT).map(([k, [t, d]]) => `<label class="modecard ${k === mode ? 'on' : ''}"><input type="radio" name="mode" value="${k}" ${k === mode ? 'checked' : ''}><div><b>${t}</b><span>${d}</span></div></label>`).join('')}</div>
+      box.innerHTML = `<h2>${opts.rotate ? 'Rotate the encryption key' : opts.change ? 'Change how the vault unlocks' : 'Set up your vault'}</h2>
+        <p class="muted">${opts.rotate ? 'A new encryption key is made and every entry, attachment and setting is re-encrypted with it. Choose how the vault unlocks from now on; the old recovery key stops working and a new one is made.' : opts.change ? 'The entries are not re-encrypted; only the lock around the key changes. The current method stops working at once.' : 'Choose what it takes to open it. Everything inside is encrypted with a random key that this lock protects; the Pi never stores it in the clear.'}</p>
+        <div class="modecards">${Object.entries(MODE_TEXT).map(([k, [t, d]]) => `<label class="modecard ${k === mode ? 'on' : ''}" ${k === 'password+securitykey' && !SB.securityKey.supported() ? 'style="opacity:.5" title="Needs HTTPS and a browser with security-key support"' : ''}><input type="radio" name="mode" value="${k}" ${k === mode ? 'checked' : ''} ${k === 'password+securitykey' && !SB.securityKey.supported() ? 'disabled' : ''}><div><b>${t}</b><span>${d}${k === 'password+securitykey' && !SB.securityKey.supported() ? ' <b>Not available here: open Strongbox over HTTPS first.</b>' : ''}</span></div></label>`).join('')}</div>
         <div class="field"><label>Recovery key</label><select id="wRec">
-          ${opts.change && opts.hasRecovery ? `<option value="keep" ${recovery === 'keep' ? 'selected' : ''}>Keep the current one</option>` : ''}
+          ${opts.change && opts.hasRecovery && !opts.rotate ? `<option value="keep" ${recovery === 'keep' ? 'selected' : ''}>Keep the current one</option>` : ''}
           <option value="new" ${recovery === 'new' ? 'selected' : ''}>Make a new one (recommended)</option>
           <option value="none" ${recovery === 'none' ? 'selected' : ''}>None: lose the factors and the data is gone</option></select>
           <div class="hint">A 40-character code you print or write down and keep somewhere safe. It opens the vault if the passphrase or the key file is lost.</div></div>
@@ -49,7 +50,12 @@
         if (needsPw(mode) && pw !== $('#wPw2', box).value) return ($('#wErr', box).textContent = 'The two passphrases differ');
         if (needsPw(mode) && pw.length < 12) return ($('#wErr', box).textContent = 'The passphrase needs at least 12 characters');
         $('#wGo', box).disabled = true; $('#wErr', box).textContent = 'Working… (the key derivation takes a second or two)';
-        try { step3(await opts.run({ mode, password: pw, recovery })); } catch (e) { $('#wGo', box).disabled = false; $('#wErr', box).textContent = e.message; }
+        try {
+          let securityKey;
+          if (needsSk(mode)) { $('#wErr', box).textContent = 'Touch your security key when it lights up (it asks twice)…'; securityKey = await SB.securityKey.register(); recovery = 'new'; }
+          $('#wErr', box).textContent = 'Working… (the key derivation takes a second or two)';
+          step3(await opts.run({ mode, password: pw, recovery, securityKey }));
+        } catch (e) { $('#wGo', box).disabled = false; $('#wErr', box).textContent = e.message; }
       };
     };
     const step3 = (r) => {
@@ -87,7 +93,7 @@
       v.innerHTML = `<div class="lockwrap"><form class="card lockcard" id="lockForm"><div class="lockicon">🔒</div><h2>Vault locked</h2>
         <p class="muted">${useRecovery ? 'Enter the recovery key you saved when the vault was created.' : `Unlock with ${esc(modeName(m).toLowerCase())}.`}</p>
         ${useRecovery ? `<div class="field"><label>Recovery key</label><input type="text" id="uRec" autocomplete="off" spellcheck="false" placeholder="XXXXX-XXXXX-…"></div>` : `
-          ${needsPw(m) ? `<div class="field"><label>Passphrase</label><input type="password" id="uPw" autocomplete="current-password"></div>` : ''}
+          ${needsPw(m) ? `<div class="field"><label>Passphrase</label><input type="password" id="uPw" autocomplete="current-password"></div>` : ''}${needsSk(m) && !useRecovery ? `<div class="hint tiny muted" style="margin:-4px 0 8px">Your security key will ask for a touch. It is tied to <span class="mono">${esc(st.securityKey && st.securityKey.rpId)}</span>${st.securityKey && st.securityKey.rpId !== location.hostname ? ' <b class="warn">but you opened a different address, so it will not work here. Use the recovery key, or open the original address.</b>' : ''}.</div>` : ''}
           ${needsKf(m) ? `<div class="field"><label>Key file</label><div><label class="filepick" id="uFileBox"><input type="file" id="uFile" accept=".key,.txt,text/plain"><span id="uFileTxt">${kfName ? '✓ ' + esc(kfName) : 'Choose the key file…'}</span></label><div class="hint tiny muted">${st.keyFileId ? `Expecting the file with ID <span class="mono">${esc(st.keyFileId)}</span>. ` : ''}It is read in your browser and sent to the Pi only to open the vault.</div></div></div>` : ''}`}
         <div class="actions"><button type="button" class="small" id="uAlt">${useRecovery ? 'Use passphrase / key file' : (st.hasRecovery ? 'Use the recovery key' : '')}</button><span class="grow"></span><button class="primary" id="uGo">Unlock</button></div>
         <div class="bad small" id="uErr">${st.blockedMs ? `Too many failed attempts; try again in ${Math.ceil(st.blockedMs / 1000)} s` : ''}</div></form></div>`;
@@ -99,7 +105,8 @@
         e.preventDefault();
         const err = $('#uErr'); err.textContent = 'Unlocking…'; $('#uGo').disabled = true;
         try {
-          await api().vault.unlock(useRecovery ? { recoveryKey: $('#uRec').value } : { password: $('#uPw') ? $('#uPw').value : undefined, keyFile: kfText || undefined });
+          let securityKey; if (!useRecovery && st.securityKey) { err.textContent = 'Touch your security key…'; securityKey = await SB.securityKey.read(st.securityKey); err.textContent = 'Unlocking…'; }
+          await api().vault.unlock(useRecovery ? { recoveryKey: $('#uRec').value } : { password: $('#uPw') ? $('#uPw').value : undefined, keyFile: kfText || undefined, securityKey });
           SB.recoveryUnlock = useRecovery; done();
         } catch (ex) {
           $('#uGo').disabled = false; err.textContent = ex.message;

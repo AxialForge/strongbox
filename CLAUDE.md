@@ -111,14 +111,19 @@ remembers which defaults were already offered, so a type the user deleted never 
 - **Editor buttons find their input through `boxOf(b)`** (`.secretin`, else `.inline`). Symptom: Show and Generate did nothing on the main password fields. Cause: `closest('.secretin, .inline')` returns the nearest of the two, and in a main field the button's own `.inline` row holds no input. Never use a combined selector for this.
 - **Printing goes through `entries:print`, never through the page.** The server decides what is in the document (secrets masked unless `secrets: true`, the whole print audited once); the browser only formats it (`SB.printHtml`) and prints it in a hidden iframe.
 
+- **Binary bodies never go through the JSON API.** `app/server/server.js` `fileRoutes` serves attachments (`/upload/file`, `/download/file/<id>`), backups to restore (`/upload/restore`, admin, re-asks for the password) and breached-password lists (`/upload/breach`). They check the session, the same-origin header and the role themselves; the kit's JSON limit is 4 MB, these allow 10 / 64 / 100 MB.
+- **A restore copies tables, it does not swap the file.** `restoreFile` ATTACHes the uploaded database, copies `vault_meta`, `tabs`, `entries`, `prefs`, `files` and two `kv` keys in one transaction, and locks the vault first, because the header (and so the key) changes. ATTACH cannot run inside a transaction. Older backups lack `prefs` / `files`; those copies are conditional.
+- **Rotating the data key re-encrypts inside one transaction** (`Vault.rotate` with a callback), and the recovery key cannot be kept (it wraps the old data key). The AAD strings (`tab/<id>`, `entry/<id>`, `pref/<k>`, `filemeta/<id>`, `file/<id>`) must stay in step between `service.js` and the rotate loop, or a rotation corrupts that table.
+- **A security-key unlock needs a recovery key, always** (`wrapFor` refuses otherwise): the credential is tied to the host name the browser saw (`rpId`), so opening the app from another address cannot use it. Registration reads the PRF secret twice and compares before anything is wrapped. This path is tested with a fixed 32-byte secret, not with a physical key.
+- **Breached-password matching keeps 64 bits of each SHA-1** in a sorted `BigUint64Array` (`breached.bin`), not the passwords. A copy made with `Buffer` must be re-aligned before it becomes a typed array (`byteOffset` is not always a multiple of 8).
+- **Who may reveal is decided by the server** (`canReveal(actor)` from `settings.vault.noReveal` and the actor's role); the page only hides the buttons. Anything new that returns a secret must call `denyReveal(a)`.
+- **`rewrap` for a security-key mode forces a fresh recovery key**; applying "keep the old one" afterwards replaced the new record and made the shown recovery key useless. Fixed in 0.8.0 and covered by a test.
+
 ## Roadmap (unbuilt)
 
-- Rotate the data key (re-encrypt every record) from Settings.
-- Restore a backup from the UI (today: stop the service and copy the file, see docs/RASPBERRY-PI.md).
 - "Remember this key file on this device" (an opt-in convenience; weakens the second factor).
-- Per-entry sharing between accounts, and read-only standard accounts that cannot reveal.
-- A WebAuthn / hardware-key factor for unlocking.
-- Attachments (photos of serial plates, config exports), encrypted the same way.
+- Per-entry sharing between accounts.
+- Test the security-key unlock with real hardware (YubiKey 5 with a recent firmware) and add a second key as a spare.
 
 ## Release
 

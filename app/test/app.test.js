@@ -32,7 +32,7 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   const made = await H('vault:create', { mode: 'password+keyfile', password: 'correct horse battery', recovery: true });
   assert.ok(made.keyFile.includes('BEGIN STRONGBOX KEY FILE') && made.recoveryKey.length === 47);
   assert.strictEqual(H('vault:status').state, 'unlocked');
-  assert.deepStrictEqual(H('tabs:list').map(t => t.builtin), ['hardware', 'services', 'websites', 'email', 'keys'], 'five default types, Services right after Hardware');
+  assert.deepStrictEqual(H('tabs:list').map(t => t.builtin), ['hardware', 'services', 'websites', 'email', 'wifi', 'keys'], 'six default types, Services right after Hardware');
 
   const tabs = H('tabs:list'), hw = tabs.find(t => t.builtin === 'hardware'), web = tabs.find(t => t.builtin === 'websites'), keys = tabs.find(t => t.builtin === 'keys');
   const CANARY = 'canary-pass-7f3a91c2', NOTE = 'canary-note-b81d44', TITLE = 'canary-title-nas';
@@ -94,7 +94,7 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.strictEqual(hl.reused.filter(x => x.group === hl.reused.find(y => y.title === 'Twin A').group).length, 2);
   assert.ok(hl.expiring.some(x => x.title === 'Licence' && x.days >= 4 && x.days <= 6), JSON.stringify(hl.expiring));
   assert.strictEqual(H('data:status').state, 'unlocked'); assert.ok(!JSON.stringify(H('data:status')).includes('Twin'));
-  const dash = H('data:dashboard'); assert.ok(dash.perTab.length === 5 && dash.recent.length);
+  const dash = H('data:dashboard'); assert.ok(dash.perTab.length === 6 && dash.recent.length);
 
   // trash and restore (a subtree goes together; purge is permanent)
   assert.strictEqual(H('entries:delete', vm.id), 2);
@@ -164,7 +164,7 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   svc.db.kvSet('seededTabs', ['hardware', 'websites', 'email', 'keys']); // as if the vault predates Services
   svc.db.run("UPDATE kv SET v=? WHERE k='seededTabs'", JSON.stringify(['hardware', 'websites', 'email', 'keys']));
   H('vault:lock'); svc.vault.fails = 0; await H('vault:unlock', { password: 'correct horse battery', keyFile: made.keyFile });
-  assert.deepStrictEqual(H('tabs:list').map(t => t.builtin), ['hardware', 'services', 'websites', 'email', 'keys'], 'Services comes back once, in place');
+  assert.deepStrictEqual(H('tabs:list').map(t => t.builtin), ['hardware', 'services', 'websites', 'email', 'wifi', 'keys'], 'Services comes back once, in place');
   H('tabs:delete', H('tabs:list').find(t => t.builtin === 'services').id);
   H('vault:lock'); svc.vault.fails = 0; await H('vault:unlock', { password: 'correct horse battery', keyFile: made.keyFile });
   assert.ok(!H('tabs:list').some(t => t.builtin === 'services'), 'a type the user removed stays removed');
@@ -269,6 +269,110 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   const au = H('vault:audit', 500);
   for (const a of ['vault_created', 'unlock', 'unlock_failed', 'reveal', 'lock', 'entry_trashed', 'unlock_method_changed', 'backup_downloaded']) assert.ok(au.some(r => r.action === a), `audit has ${a}`);
   assert.ok(!JSON.stringify(au).includes(CANARY));
+
+  // ---- Wi-Fi type, rotation reminders, known-breached passwords, bulk actions ------------------------------
+  const wifiTab = H('tabs:list').find(t => t.builtin === 'wifi');
+  assert.ok(wifiTab && wifiTab.fields.some(f => f.key === 'ssid') && H('templates:list').some(t => t.id === 'b:wifi' && t.tabId === wifiTab.id));
+  const wnet = H('entries:save', { tabId: wifiTab.id, title: 'Home Wi-Fi', fields: { ssid: 'AXIAL', security: 'WPA2/WPA3' }, secrets: { pass: 'wifi-secret-pass-1' }, rotateDays: 1 });
+  assert.strictEqual(wnet.rotateDays, 1);
+  assert.ok(!H('vault:health').due.some(d => d.id === wnet.id), 'not due yet');
+  const realNow = Date.now; Date.now = () => realNow() + 3 * 864e5;
+  try { const due = H('vault:health').due.find(d => d.id === wnet.id); assert.ok(due && due.days >= 3 && due.every === 1, 'due after three days'); } finally { Date.now = realNow; }
+  assert.strictEqual(H('entries:save', { id: wnet.id, tabId: wifiTab.id, title: 'Home Wi-Fi', rotateDays: 0 }).rotateDays, 0);
+
+  const weakKnown = H('entries:save', { tabId: web.id, title: 'Known bad', secrets: { pass: 'password123' } });
+  assert.ok(H('vault:health').breached.some(b => b.id === weakKnown.id), 'built-in common passwords are flagged');
+  const sha1 = (x) => require('crypto').createHash('sha1').update(x).digest('hex').toUpperCase();
+  const leaked = H('entries:save', { tabId: web.id, title: 'Leaked', secrets: { pass: 'Zq9!custom-leaked-pass' } });
+  assert.ok(!H('vault:health').breached.some(b => b.id === leaked.id));
+  assert.strictEqual(svc.breach.load({ user: 'a' }, Buffer.from(`${sha1('Zq9!custom-leaked-pass')}:1234\r\nsome-other-leak\r\n\r\n`)).count, 2);
+  assert.ok(H('vault:health').breached.some(b => b.id === leaked.id), 'a loaded list flags matching passwords');
+  assert.strictEqual(H('breach:status').custom, 2);
+  assert.strictEqual(H('breach:clear').custom, 0); assert.ok(!H('vault:health').breached.some(b => b.id === leaked.id));
+  assert.strictEqual(H('vault:health').breached.some(b => b.id === weakKnown.id), true);
+
+  const bulkA = H('entries:save', { tabId: web.id, title: 'Bulk A' }), bulkB = H('entries:save', { tabId: web.id, title: 'Bulk B', tags: ['keep'] });
+  assert.strictEqual(H('entries:bulk', [bulkA.id, bulkB.id], 'addTag', 'Batch'), 2);
+  assert.deepStrictEqual(H('entries:get', bulkB.id).tags.sort(), ['batch', 'keep']);
+  assert.strictEqual(H('entries:bulk', [bulkA.id, bulkB.id], 'addTag', 'batch'), 0, 'already tagged');
+  assert.strictEqual(H('entries:bulk', [bulkA.id, bulkB.id], 'removeTag', 'batch'), 2);
+  assert.strictEqual(H('entries:bulk', [bulkA.id], 'favorite', true), 1); assert.strictEqual(H('entries:get', bulkA.id).favorite, true);
+  assert.strictEqual(H('entries:bulk', [bulkA.id, bulkB.id], 'move', { tabId: hw.id }), 2); assert.strictEqual(H('entries:get', bulkB.id).tabId, hw.id);
+  await fails(Promise.resolve().then(() => H('entries:bulk', [bulkA.id], 'move', { tabId: 99999 })), /No such type/);
+  await fails(Promise.resolve().then(() => H('entries:bulk', [bulkA.id], 'explode')), /Unknown bulk action/);
+  assert.strictEqual(H('entries:bulk', [bulkA.id, bulkB.id], 'delete'), 2); assert.ok(!H('entries:list').some(e => e.id === bulkA.id));
+  H('entries:purge', null);
+
+  // ---- accounts that may see entries but not passwords ---------------------------------------------------------
+  svc.settings.set({ vault: { noReveal: ['bob'] } });
+  const bob = { user: 'bob', ip: '10.0.0.9', role: 'standard' }, admin = { user: 'bob', ip: '10.0.0.9', role: 'admin' };
+  const call = (a, ch, ...args) => svc.api[ch](a, ...args);
+  assert.strictEqual(call(bob, 'entries:get', multi.id).canReveal, false); assert.strictEqual(call(admin, 'entries:get', multi.id).canReveal, true, 'admins are never restricted');
+  assert.ok(call(bob, 'entries:list').every(e => e.quick === null)); assert.ok(call({ user: 'amy', role: 'standard' }, 'entries:list').some(e => e.quick));
+  for (const [ch, args] of [['entries:reveal', [server.id, 'field:pass']], ['entries:totp', [svcEntry.id, 'totp']], ['entries:print', [[server.id], { secrets: true }]]]) assert.throws(() => call(bob, ch, ...args), /not their passwords/, ch);
+  assert.ok(call(bob, 'entries:print', [server.id], {}).docs.length, 'printing without secrets is fine');
+  assert.strictEqual(call({ user: 'amy', role: 'standard' }, 'entries:reveal', server.id, 'field:pass'), 'a-new-password-99');
+  svc.settings.set({ vault: { noReveal: [] } });
+
+  // ---- attachments: encrypted, searchable by nobody, gone with the entry ---------------------------------------
+  const FILE_MARK = 'canary-file-bytes-5d2e', FILE_NAME = 'canary-name-serial-plate.png';
+  const fl = svc.files.add({ user: 'joe' }, server.id, FILE_NAME, 'image/png', Buffer.from('PNGDATA ' + FILE_MARK));
+  assert.strictEqual(fl.length, 1); assert.strictEqual(fl[0].name, FILE_NAME); assert.strictEqual(H('entries:get', server.id).files[0].size, 8 + FILE_MARK.length);
+  assert.strictEqual(svc.files.read({ user: 'joe', role: 'admin' }, fl[0].id).data.toString(), 'PNGDATA ' + FILE_MARK);
+  svc.settings.set({ vault: { noReveal: ['bob'] } });
+  assert.throws(() => svc.files.read({ user: 'bob', role: 'standard' }, fl[0].id), /not their passwords/);
+  svc.settings.set({ vault: { noReveal: [] } });
+  svc.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  assert.ok(!allFileBytes().includes(FILE_MARK) && !allFileBytes().includes(FILE_NAME), 'attachments and their names are not readable on disk');
+  assert.throws(() => svc.files.add({}, server.id, 'big.bin', 'x', Buffer.alloc(10 * 1024 * 1024 + 1)), /at most 10 MB/);
+  assert.throws(() => svc.files.add({}, server.id, 'empty', 'x', Buffer.alloc(0)), /empty/);
+  const rowId = svc.db.get('SELECT id FROM files WHERE entry_id=?', server.id).id;
+  const tampered = svc.db.get('SELECT data FROM files WHERE id=?', rowId).data; svc.db.run('UPDATE files SET data=? WHERE id=?', Buffer.concat([Buffer.from(tampered.subarray(0, 20)), Buffer.from([tampered[20] ^ 1]), Buffer.from(tampered.subarray(21))]), rowId);
+  assert.throws(() => svc.files.read({ role: 'admin' }, rowId), /authenticate/i, 'a changed attachment is detected'); svc.db.run('UPDATE files SET data=? WHERE id=?', tampered, rowId);
+  const scratch = H('entries:save', { tabId: hw.id, title: 'Scratch' }); svc.files.add({}, scratch.id, 'a.txt', 'text/plain', Buffer.from('hello'));
+  H('entries:delete', scratch.id); H('entries:purge', [scratch.id]); assert.strictEqual(svc.db.get('SELECT COUNT(*) n FROM files WHERE entry_id=?', scratch.id).n, 0, 'purging an entry removes its attachments');
+  assert.strictEqual(H('files:delete', fl[0].id).length, 0);
+
+  // ---- restore a backup -----------------------------------------------------------------------------------------
+  const snapshot = Buffer.from(H('vault:backup').base64, 'base64');
+  const keepCount = H('entries:list').length;
+  const lateEntry = H('entries:save', { tabId: web.id, title: 'Added after the backup' });
+  assert.throws(() => svc.restoreFile({}, Buffer.from('not a database at all'.repeat(400))), /not a Strongbox backup/);
+  const rs = svc.restoreFile({ user: 'joe', ip: '10.0.0.1' }, snapshot);
+  assert.strictEqual(rs.entries, keepCount); assert.strictEqual(H('vault:status').state, 'locked', 'a restore leaves the vault locked');
+  assert.ok(fs.readdirSync(svc.db.file + '.backups').some(f => /pre-restore/.test(f)), 'the current database is kept first');
+  await H('vault:unlock', { keyFile: kfOnly.keyFile });
+  assert.strictEqual(H('entries:list').length, keepCount); assert.ok(!H('entries:list').some(e => e.id === lateEntry.id), 'entries added after the backup are gone');
+  assert.strictEqual(H('entries:reveal', server.id, 'field:pass'), 'a-new-password-99'); assert.ok(H('vault:audit', 30).some(r => r.action === 'backup_restored'));
+
+  // ---- a hardware security key as a factor (the browser supplies a 32-byte secret; here a fixed one) --------------
+  const skSecret = require('crypto').randomBytes(32).toString('base64'), skMeta = { secret: skSecret, credId: 'Y3JlZA', salt: 'c2FsdA', rpId: 'strongbox.home' };
+  await fails(H('vault:rewrap', { mode: 'password+securitykey', password: 'security key passphrase', securityKey: { ...skMeta, secret: 'AAAA' } }), /usable secret/);
+  const sk = await H('vault:rewrap', { mode: 'password+securitykey', password: 'security key passphrase', securityKey: skMeta });
+  assert.ok(sk.recoveryKey && sk.keyFile === null, 'a security key always comes with a recovery key');
+  assert.deepStrictEqual(H('vault:status').securityKey, { credId: 'Y3JlZA', salt: 'c2FsdA', rpId: 'strongbox.home' });
+  H('vault:lock'); svc.vault.fails = 0;
+  await fails(H('vault:unlock', { password: 'security key passphrase' }), /security key is required/);
+  await fails(H('vault:unlock', { password: 'security key passphrase', securityKey: require('crypto').randomBytes(32).toString('base64') }), /Wrong/);
+  svc.vault.fails = 0;
+  await H('vault:unlock', { password: 'security key passphrase', securityKey: skSecret });
+  assert.strictEqual(H('entries:reveal', server.id, 'field:pass'), 'a-new-password-99');
+  H('vault:lock'); await H('vault:unlock', { recoveryKey: sk.recoveryKey });
+
+  // ---- rotate the data key: everything re-encrypted, old recovery key dead, nothing lost ----------------------------
+  svc.files.add({}, server.id, 'plate.txt', 'text/plain', Buffer.from('rotate me'));
+  const before = svc.db.get('SELECT blob FROM entries WHERE id=?', server.id).blob;
+  await fails(H('vault:rotate', { mode: 'password', password: 'short', recovery: 'new' }), /at least 12/);
+  const rot = await H('vault:rotate', { mode: 'password', password: 'a rotated passphrase', recovery: 'new' });
+  assert.ok(rot.recoveryKey && rot.recoveryKey !== sk.recoveryKey);
+  assert.ok(!Buffer.from(before).equals(Buffer.from(svc.db.get('SELECT blob FROM entries WHERE id=?', server.id).blob)), 'the ciphertext changed');
+  assert.strictEqual(H('entries:reveal', server.id, 'field:pass'), 'a-new-password-99'); assert.strictEqual(svc.files.read({ role: 'admin' }, svc.db.get('SELECT id FROM files WHERE entry_id=?', server.id).id).data.toString(), 'rotate me');
+  assert.ok(fs.readdirSync(svc.db.file + '.backups').some(f => /pre-rotate/.test(f)));
+  H('vault:lock'); svc.vault.fails = 0;
+  await fails(H('vault:unlock', { recoveryKey: sk.recoveryKey }), /Wrong/); svc.vault.fails = 0;
+  await fails(H('vault:unlock', { password: 'security key passphrase', securityKey: skSecret }), /Wrong|usable|required|damaged/); svc.vault.fails = 0;
+  await H('vault:unlock', { password: 'a rotated passphrase' });
+  assert.strictEqual(H('entries:get', server.id).title, TITLE); assert.strictEqual(H('tabs:list').length >= 4, true); assert.ok(H('tags:list'), 'preferences survive too'); assert.ok(H('templates:list').length);
 
   // idle auto-lock
   svc.settings.set({ vault: { autoLockMinutes: 1 } });

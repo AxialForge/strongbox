@@ -167,7 +167,7 @@
     td.k{width:150px;color:#555}.mono{font-family:Consolas,monospace}.h{font-size:10px;text-transform:uppercase;color:#666;margin:8px 0 0;letter-spacing:.06em}
     .warn{border:2px solid #b00;color:#b00;padding:6px 10px;margin-bottom:12px;font-weight:600}.n{white-space:pre-wrap}.nest{margin-left:22px}.tag{border:1px solid #999;border-radius:9px;padding:0 6px;font-size:10px;margin-right:3px}
     @media print{body{margin:10mm}}`;
-  function printHtml(res) {
+  function printHtml(res, intro = '') {
     const doc = (d) => {
       const kv = (rows) => rows.length ? `<table>${rows.join('')}</table>` : '';
       const rows = d.fields.map(f => `<tr><td class="k">${escH(f.label)}</td><td class="${f.mono ? 'mono' : ''}">${escH(f.value)}</td></tr>`);
@@ -176,7 +176,7 @@
       const specs = d.specs.length ? `<div class="h">Specs</div>${kv(d.specs.map(s => `<tr><td class="k">${escH(s.k)}</td><td>${escH(s.v)}</td></tr>`))}` : '';
       return `<div class="e ${d.depth ? 'nest' : ''}"><h2>${escH(d.title)}</h2><div class="m">${escH([d.type, ...d.path].join(' › '))}${d.subtitle ? ' · ' + escH(d.subtitle) : ''} ${d.tags.map(t => `<span class="tag">${escH(t)}</span>`).join('')}</div>${kv(rows)}${accts}${nics}${specs}${d.notes ? `<div class="h">Notes</div><div class="n">${escH(d.notes)}</div>` : ''}</div>`;
     };
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Strongbox</title><style>${PRINT_CSS}</style></head><body><h1>Strongbox</h1><div class="sub">Printed ${escH(new Date(res.at).toLocaleString())} · ${res.docs.length} entr${res.docs.length === 1 ? 'y' : 'ies'}${res.secrets ? '' : ' · passwords and secrets hidden'}</div>${res.secrets ? '<div class="warn">This page contains passwords and secrets in clear text. Keep it somewhere safe and shred it when you are done.</div>' : ''}${res.docs.map(doc).join('')}</body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Strongbox</title><style>${PRINT_CSS}</style></head><body><h1>Strongbox</h1><div class="sub">Printed ${escH(new Date(res.at).toLocaleString())} · ${res.docs.length} entr${res.docs.length === 1 ? 'y' : 'ies'}${res.secrets ? '' : ' · passwords and secrets hidden'}</div>${res.secrets ? '<div class="warn">This page contains passwords and secrets in clear text. Keep it somewhere safe and shred it when you are done.</div>' : ''}${intro}${res.docs.map(doc).join('')}</body></html>`;
   }
   /** Prints through a hidden frame, so no pop-up is needed. */
   function printFrame(html) {
@@ -187,19 +187,62 @@
     document.body.append(f);
   }
   /** Asks what to include, then prints. ids: the entries; opts: { title, hasKids, many } */
-  function printDialog(ids, { title = '', hasKids = false, many = false } = {}) {
+  function printDialog(ids, { title = '', hasKids = false, many = false, canReveal = true } = {}) {
     const card = window.UI.openModal(`<h2>Print ${esc(title)}</h2><div class="path">A clean page without the app around it. Choose what goes on paper.</div>
       ${hasKids ? '<div class="field"><label>Nested</label><label class="inline small"><input type="checkbox" id="pkKids" checked> include the entries nested under it</label></div>' : ''}
       <div class="field"><label>Notes</label><label class="inline small"><input type="checkbox" id="pkNotes" checked> include notes and specs</label></div>
       <div class="field"><label>Passwords</label><div><label class="inline small"><input type="checkbox" id="pkSecrets"> include passwords, PINs, keys and 2FA seeds in clear text</label><div class="hint tiny muted" id="pkHint">Off: they print as dots. Printing secrets is logged in Activity.</div></div></div>
       <div class="actions"><span class="grow"></span><button id="pkCancel">Cancel</button><button class="primary" id="pkGo">Print</button></div>`);
-    $('#pkSecrets', card).onchange = (e) => { $('#pkHint', card).innerHTML = e.target.checked ? '<span class="warn">Anyone who finds the paper can use them. Keep it safe and shred it afterwards.</span>' : 'Off: they print as dots. Printing secrets is logged in Activity.'; };
+    if (!canReveal) $('#pkSecrets', card).closest('.field').remove(); else $('#pkSecrets', card).onchange = (e) => { $('#pkHint', card).innerHTML = e.target.checked ? '<span class="warn">Anyone who finds the paper can use them. Keep it safe and shred it afterwards.</span>' : 'Off: they print as dots. Printing secrets is logged in Activity.'; };
     $('#pkCancel', card).onclick = window.UI.closeModal;
     $('#pkGo', card).onclick = async () => {
-      const opts = { children: !!($('#pkKids', card) && $('#pkKids', card).checked), notes: $('#pkNotes', card).checked, secrets: $('#pkSecrets', card).checked };
+      const opts = { children: !!($('#pkKids', card) && $('#pkKids', card).checked), notes: $('#pkNotes', card).checked, secrets: !!($('#pkSecrets', card) && $('#pkSecrets', card).checked) };
       try { const res = await api().entries.print(ids, opts); window.UI.closeModal(); if (!res.docs.length) return toast('Nothing to print', true); printFrame(printHtml(res)); } catch (e) { toast(e.message, true); }
     };
   }
+
+  // ---------- emergency sheet ------------------------------------------------------------------------
+  async function emergencySheet() {
+    const list = await api().entries.list();
+    let ids = list.filter(e => e.tags.includes('emergency')).map(e => e.id), basis = 'tagged "emergency"';
+    if (!ids.length) { ids = list.filter(e => e.favorite).map(e => e.id); basis = 'marked as favorites'; }
+    if (!ids.length) return toast('Tag the entries you want on the sheet "emergency" (or star them), then try again', true);
+    if (!confirm(`Print ${ids.length} entr${ids.length === 1 ? 'y' : 'ies'} ${basis}, with their passwords in clear text, together with how to unlock the vault?`)) return;
+    const res = await api().entries.print(ids, { secrets: true, children: false });
+    const st = SB.status || {}, note = (SB.settings || {}).emergencyNote || '';
+    const row = (k, v) => `<tr><td class="k">${escH(k)}</td><td>${v}</td></tr>`;
+    const intro = `<div class="e"><h2>How to open Strongbox</h2><div class="m">Keep this page in a safe place. It is only useful with the things below.</div><table>
+      ${row('Address', `<span class="mono">${escH(location.origin)}</span>`)}${row('Unlock method', escH((SB.modeName ? SB.modeName(st.mode) : st.mode) || ''))}
+      ${st.keyFileId ? row('Key file', `ID <span class="mono">${escH(st.keyFileId)}</span> (kept on a USB stick or another computer, not on the Pi)`) : ''}
+      ${row('Recovery key', '<span class="mono">________________________________________</span> (write it here by hand)')}${row('Admin account', 'name: ____________________')}</table>
+      ${note ? `<div class="h">Notes</div><div class="n">${escH(note)}</div>` : ''}</div>`;
+    printFrame(printHtml(res, intro));
+  }
+
+  // ---------- hardware security key (WebAuthn PRF) --------------------------------------------------
+  // The key never leaves the device: with the PRF extension it computes a 32-byte secret from a salt we give it,
+  // the same every time. That secret joins the passphrase in the key derivation, exactly like a key file would.
+  const b64u = { enc: (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''), dec: (s) => Uint8Array.from(atob(String(s).replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((String(s).length + 3) % 4)), c => c.charCodeAt(0)) };
+  const stdB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const securityKey = {
+    supported: () => !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext),
+    async read({ credId, salt, rpId }) {
+      const a = await navigator.credentials.get({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: rpId || location.hostname, allowCredentials: [{ type: 'public-key', id: b64u.dec(credId) }], userVerification: 'preferred', extensions: { prf: { eval: { first: b64u.dec(salt) } } } } });
+      const ext = a.getClientExtensionResults(), out = ext.prf && ext.prf.results && ext.prf.results.first;
+      if (!out || out.byteLength !== 32) throw new Error('This security key or browser does not offer the hmac-secret (PRF) feature Strongbox needs. Use a passphrase and key file instead.');
+      return stdB64(out);
+    },
+    /** Makes a credential and proves it works: the secret is read twice and must match before it is used for anything. */
+    async register() {
+      if (!securityKey.supported()) throw new Error('Security keys need HTTPS and a browser that supports them');
+      const salt = crypto.getRandomValues(new Uint8Array(32));
+      const cred = await navigator.credentials.create({ publicKey: { rp: { name: 'Strongbox', id: location.hostname }, user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'strongbox', displayName: 'Strongbox vault' }, challenge: crypto.getRandomValues(new Uint8Array(32)), pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { residentKey: 'discouraged', userVerification: 'preferred' }, extensions: { prf: {} } } });
+      const meta = { credId: b64u.enc(cred.rawId), salt: b64u.enc(salt), rpId: location.hostname };
+      const first = await securityKey.read(meta), second = await securityKey.read(meta);
+      if (first !== second) throw new Error('The security key gave different answers twice, so it cannot be used as a lock. Nothing was changed.');
+      return { ...meta, secret: first };
+    },
+  };
 
   // ---------- tags ----------------------------------------------------------------------------------
   const tagBadge = (name) => { const c = SB.tagColors[name]; return `<span class="badge tag ${c ? 'tc-' + c : ''}">${esc(name)}</span>`; };
@@ -227,5 +270,5 @@
   }
   const MASK = '••••••••••';
 
-  Object.assign(SB, { printDialog, printHtml, copy, download, generate, generatorPanel, generatorModal, GEN_PRESETS, meterHtml, strengthLabel, withSecret, wireSecrets, MASK, writeClipboard, tagBadge, loadTags });
+  Object.assign(SB, { emergencySheet, securityKey, printDialog, printHtml, copy, download, generate, generatorPanel, generatorModal, GEN_PRESETS, meterHtml, strengthLabel, withSecret, wireSecrets, MASK, writeClipboard, tagBadge, loadTags });
 })();

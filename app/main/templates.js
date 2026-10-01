@@ -39,6 +39,11 @@ const DEFAULT_TABS = [
     f('address', 'Address'), f('provider', 'Provider'), f('pass', 'Password', 'password', { gen: 'strong' }), f('app', 'App password', 'password', { gen: 'alnum' }), f('totp', 'Authenticator seed', 'totp'),
     f('imap', 'Incoming server (IMAP)'), f('smtp', 'Outgoing server (SMTP)'), f('recoveryTo', 'Recovery e-mail / phone'),
   ] },
+  { builtin: 'wifi', name: 'Wi-Fi', icon: '≋', color: 'pink', fields: [
+    f('ssid', 'Network name (SSID)'), f('security', 'Security', 'select', { options: ['WPA3', 'WPA2/WPA3', 'WPA2', 'WPA', 'WEP', 'Open'] }), f('pass', 'Password', 'password', { gen: 'wifi' }),
+    f('hidden', 'Hidden network', 'select', { options: ['No', 'Yes'] }), f('band', 'Band', 'select', { options: ['2.4 GHz', '5 GHz', '6 GHz', 'Dual / tri band'] }),
+    f('router', 'Router / access point'), f('vlan', 'VLAN / network'), f('location', 'Where it reaches'),
+  ] },
   { builtin: 'keys', name: 'Keys & licences', icon: '⚿', color: 'green', fields: [
     f('kind', 'Kind', 'select', { options: ['Hardware security key', 'Software licence', 'SSH key', 'API key', 'GPG key', 'Wi-Fi', 'Certificate', 'Other'] }),
     f('vendor', 'Vendor / product'), f('serial', 'Serial / key ID'), f('key', 'Key / secret', 'secret', { multiline: true }), f('pin', 'PIN / passphrase', 'secret', { gen: 'pin6' }),
@@ -55,6 +60,7 @@ const BUILTIN_TEMPLATES = [
   { id: 'b:router', name: 'Router / firewall', icon: '▦', tabKey: 'hardware', tags: ['network'], fields: { kind: 'Router' }, specs: ['Firmware', 'Ports', 'Uplink'], creds: ['Web UI', 'SSH / console'], nics: ['LAN', 'WAN'] },
   { id: 'b:switch', name: 'Switch / access point', icon: '▦', tabKey: 'hardware', tags: ['network'], fields: { kind: 'Switch' }, specs: ['Ports', 'PoE budget', 'Firmware'], creds: ['Web UI', 'SSH / console'], nics: ['Management'] },
   { id: 'b:service', name: 'Service / app', icon: '⚙', tabKey: 'services', tags: ['service'], fields: { kind: 'Web app' }, specs: ['Data folder'], creds: ['Admin', 'API'], nics: [] },
+  { id: 'b:wifi', name: 'Wi-Fi network', icon: '≋', tabKey: 'wifi', tags: ['wifi'], fields: { security: 'WPA2/WPA3', hidden: 'No' }, specs: [], creds: [], nics: [] },
   { id: 'b:website', name: 'Website login', icon: '◍', tabKey: 'websites', tags: [], fields: {}, specs: [], creds: [], nics: [] },
   { id: 'b:key', name: 'Hardware security key', icon: '⚿', tabKey: 'keys', tags: ['2fa'], fields: { kind: 'Hardware security key' }, specs: ['Protocols'], creds: [], nics: [] },
   { id: 'b:licence', name: 'Software licence', icon: '⚿', tabKey: 'keys', tags: ['licence'], fields: { kind: 'Software licence' }, specs: ['Seats', 'Version'], creds: [], nics: [] },

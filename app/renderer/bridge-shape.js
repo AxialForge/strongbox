@@ -25,15 +25,17 @@
   data: { dashboard: 'data:dashboard', status: 'data:status' },
   vault: {
     status: 'vault:status', touch: 'vault:touch', create: 'vault:create', unlock: 'vault:unlock', lock: 'vault:lock', rewrap: 'vault:rewrap', newRecovery: 'vault:newRecovery',
-    resetEmpty: 'vault:resetEmpty', backup: 'vault:backup', health: 'vault:health', audit: 'vault:audit',
+    resetEmpty: 'vault:resetEmpty', rotate: 'vault:rotate', restoreCheck: 'vault:restoreCheck', backup: 'vault:backup', health: 'vault:health', audit: 'vault:audit',
     onLocked: '!vault:locked', onChanged: '!vault:changed',
   },
   tags: { list: 'tags:list', save: 'tags:save', delete: 'tags:delete' },
   templates: { list: 'templates:list', save: 'templates:save', delete: 'templates:delete' },
   network: { list: 'network:list' },
+  breach: { status: 'breach:status', clear: 'breach:clear' },
+  files: { delete: 'files:delete' },
   tabs: { list: 'tabs:list', save: 'tabs:save', reorder: 'tabs:reorder', delete: 'tabs:delete' },
   entries: {
-    list: 'entries:list', print: 'entries:print', duplicate: 'entries:duplicate', exportCsv: 'entries:exportCsv', search: 'entries:search', get: 'entries:get', save: 'entries:save', move: 'entries:move', reveal: 'entries:reveal', totp: 'entries:totp',
+    list: 'entries:list', print: 'entries:print', duplicate: 'entries:duplicate', bulk: 'entries:bulk', exportCsv: 'entries:exportCsv', search: 'entries:search', get: 'entries:get', save: 'entries:save', move: 'entries:move', reveal: 'entries:reveal', totp: 'entries:totp',
     delete: 'entries:delete', trash: 'entries:trash', restore: 'entries:restore', purge: 'entries:purge', importCsv: 'entries:importCsv',
   },
 });

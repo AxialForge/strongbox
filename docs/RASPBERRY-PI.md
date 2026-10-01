@@ -99,6 +99,8 @@ The vault key exists in the Pi's memory while the vault is unlocked, and the dat
 
 ## Restore a backup
 
+The easy way: Settings → Safety net → **Restore a backup**, then choose the file. The manual way, if you cannot sign in:
+
 ```bash
 sudo systemctl stop strongbox
 sudo cp <backup>.db /var/lib/strongbox/strongbox.db

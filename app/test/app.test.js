@@ -481,6 +481,20 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   svc.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); assert.ok(!allFileBytes().includes('Pq9!xxxxxxxx1') && !allFileBytes().includes('q1.example.net'), 'queued logins are encrypted on disk');
   assert.strictEqual(H('inbox:clear').pending, 0); H('inbox:add', 'name,url,username,password\nQueued one,https://q1.example.net,u,Pq9!xxxxxxxx1\nQueued two,https://q2.example.net,u,Pq9!xxxxxxxx2');
 
+  // ---- a second place for the nightly backup -----------------------------------------------------------------------
+  const bdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-copy-'));
+  assert.deepStrictEqual([H('backups:status').dir, H('backups:status').configured], ['', false]); assert.strictEqual(H('backups:now').copy.skipped, true, 'no folder set: nothing to copy, nothing fails');
+  assert.throws(() => H('backups:test', 'relative/dir'), /full path/); assert.throws(() => H('backups:test', ''), /Enter a folder/); assert.strictEqual(H('backups:test', path.join(bdir, 'new', 'sub')).ok, true);
+  svc.settings.set({ backup: { copyDir: bdir, keepCopies: 2 } });
+  const bn = H('backups:now'); assert.strictEqual(bn.copy.ok, true); assert.ok(fs.existsSync(path.join(bdir, bn.copy.file)) && fs.readFileSync(path.join(bdir, bn.copy.file)).subarray(0, 15).toString('latin1') === 'SQLite format 3');
+  assert.ok(!fs.readFileSync(path.join(bdir, bn.copy.file)).toString('latin1').includes(CANARY), 'the copy is the same encrypted file');
+  for (let i = 0; i < 3; i++) { await new Promise(r => setTimeout(r, 1100)); H('backups:now'); }
+  assert.strictEqual(fs.readdirSync(bdir).filter(f => f.endsWith('.db')).length, 2, 'only the newest copies are kept'); assert.strictEqual(H('backups:status').last.ok, true);
+  svc.settings.set({ backup: { copyDir: path.join(bdir, 'x.db', 'impossible') } }); fs.writeFileSync(path.join(bdir, 'x.db'), 'a file where a folder is needed');
+  const bad = H('backups:now'); assert.strictEqual(bad.copy.ok, false); assert.strictEqual(H('backups:status').last.ok, false, 'a failed copy is remembered and shown');
+  svc.settings.set({ backup: { copyDir: '' } }); assert.strictEqual(H('backups:status').configured, false);
+  svc.settings.set({ nas: { dir: bdir } }); assert.strictEqual(H('backups:status').fromInstaller, true, 'the installer\'s NAS folder is used when nothing else is set'); svc.settings.set({ nas: { dir: '' } });
+
   // ---- attachments: encrypted, searchable by nobody, gone with the entry ---------------------------------------
   const FILE_MARK = 'canary-file-bytes-5d2e', FILE_NAME = 'canary-name-serial-plate.png';
   const fl = svc.files.add({ user: 'joe' }, server.id, FILE_NAME, 'image/png', Buffer.from('PNGDATA ' + FILE_MARK));

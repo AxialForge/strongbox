@@ -132,6 +132,8 @@ remembers which defaults were already offered, so a type the user deleted never 
 - **A fully blank CSV row is dropped by `parseCsv`**, so it is not counted as "no name".
 - **Suggestion rules are plain substring matches on the host** (`app/main/suggest.js`); `mail.google.com` needed its own rule. Learned rules (`prefs.domainRules`) override the built-in ones.
 
+- **The backup copy never replaces the local backup.** `db.backup()` always writes to `<db>.backups/` first (newest 10 kept); `copyBackupOut` then copies that file to `backup.copyDir` (or the installer's `nas.dir`) and prunes by modification time. A failure is stored in `kv.backupCopy` and notified, never thrown, so a down NAS cannot stop the nightly job. The service user must be able to write there (the installer mounts a share with the service user's uid).
+
 ## Roadmap (unbuilt)
 
 - "Remember this key file on this device" (an opt-in convenience; weakens the second factor).

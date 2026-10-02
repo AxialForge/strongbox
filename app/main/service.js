@@ -74,8 +74,10 @@ const MIGRATIONS = [];
 
 const DEFAULTS = {
   vault: { autoLockMinutes: 15, clipboardClearSeconds: 30, revealSeconds: 20, staleDays: 365, weakBits: 50, expiringDays: 60, trashDays: 30, lowCodes: 2, kdfLog2N: 17, genPresets: [], noReveal: [], emergencyNote: '' },
-  backup: { time: '03:30' },
-  notify: { events: { unlockFailed: true, dailySummary: false } },
+  // copyDir: a second place for the nightly backup (a NAS share mounted on the Pi); empty uses the installer's nas.dir when it set one.
+  backup: { time: '03:30', copyDir: '', keepCopies: 30 },
+  nas: { dir: '' },
+  notify: { events: { unlockFailed: true, dailySummary: false, backupFailed: true } },
 };
 
 const clip = (v, n) => String(v == null ? '' : v).slice(0, n);
@@ -996,7 +998,36 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
 
   // ---- jobs --------------------------------------------------------------------------------
   core.every('autolock', 15000, () => { if (vault.unlocked && vault.lockInMs() === 0) { vault.lock('idle'); audit(null, 'autolock'); } });
-  core.daily('backup', () => settings.get().backup.time, () => { const dest = db.backup('nightly'); log('backup: ' + dest); });
+  // ---- backup copies: the encrypted database, copied to a folder you choose (a NAS share) -------------------
+  const copyDirOf = () => String(settings.get().backup.copyDir || (settings.get().nas || {}).dir || '').trim();
+  function copyBackupOut(file) {
+    const dir = copyDirOf(), keep = Math.max(1, Number(settings.get().backup.keepCopies) || 30);
+    if (!dir) return { ok: true, dir: '', skipped: true };
+    try {
+      if (!path.isAbsolute(dir)) throw new Error('the folder must be a full path, such as /mnt/strongbox/Backups');
+      fs.mkdirSync(dir, { recursive: true });
+      const dest = path.join(dir, path.basename(file));
+      fs.copyFileSync(file, dest);
+      const olds = fs.readdirSync(dir).filter(f => /^.*\.db$/.test(f) && f !== path.basename(dest)).map(f => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((x, y) => y.t - x.t);
+      for (const o of olds.slice(Math.max(0, keep - 1))) { try { fs.unlinkSync(path.join(dir, o.f)); } catch { /* ignore */ } }
+      const r = { ok: true, dir, file: path.basename(dest), at: Date.now() }; db.kvSet('backupCopy', r); return r;
+    } catch (e) {
+      const r = { ok: false, dir, error: e.message, at: Date.now() }; db.kvSet('backupCopy', r); return r;
+    }
+  }
+  api('backups:status', () => ({ dir: copyDirOf(), configured: !!settings.get().backup.copyDir, fromInstaller: !settings.get().backup.copyDir && !!(settings.get().nas || {}).dir, keep: Number(settings.get().backup.keepCopies) || 30, last: db.kvGet('backupCopy', null), local: (() => { try { return fs.readdirSync(db.file + '.backups').filter(f => f.endsWith('.db')).length; } catch { return 0; } })() }), { data: false });
+  api('backups:test', (a, dir) => {
+    dir = String(dir || '').trim(); if (!dir) throw new Error('Enter a folder first');
+    if (!path.isAbsolute(dir)) throw new Error('The folder must be a full path, such as /mnt/strongbox/Backups');
+    try { fs.mkdirSync(dir, { recursive: true }); const f = path.join(dir, `.strongbox-write-test-${Date.now()}`); fs.writeFileSync(f, 'ok'); fs.unlinkSync(f); } catch (e) { throw new Error(`Cannot write there: ${e.message}`); }
+    return { ok: true };
+  }, { data: false });
+  api('backups:now', (a) => { const file = db.backup('manual'), r = copyBackupOut(file); audit(a, 'backup_copied', null, r.ok ? (r.dir || 'no folder set') : 'failed'); return { local: path.basename(file), copy: r }; }, { data: false });
+  core.daily('backup', () => settings.get().backup.time, () => {
+    const dest = db.backup('nightly'); log('backup: ' + dest);
+    const r = copyBackupOut(dest);
+    if (r.dir && !r.ok) { log('backup copy failed: ' + r.error); notify('backupFailed', 'Strongbox: backup copy failed', `The nightly backup could not be copied to ${r.dir}: ${r.error}`); } else if (r.dir) log('backup copied to ' + r.dir);
+  });
   core.daily('trash', () => '04:10', () => { const days = Number(cfg().trashDays) || 0; if (!days) return; const old = db.all('SELECT id FROM entries WHERE deleted IS NOT NULL AND deleted < ?', Date.now() - days * DAY).map(r => r.id); if (old.length) log(`trash: purged ${purge(old)} item(s) older than ${days} days`); });
   core.daily('summary', () => settings.get().notify.dailyTime, () => {
     if (!settings.get().notify.events.dailySummary) return;

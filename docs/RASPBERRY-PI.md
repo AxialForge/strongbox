@@ -95,7 +95,7 @@ The vault key exists in the Pi's memory while the vault is unlocked, and the dat
 - **Keep it LAN-only.** Leave Security → LAN only on, never publish Strongbox with Tailscale Funnel or a port forward, turn on two-factor codes for the admin, and
   give each person their own account (standard accounts can read but not change).
 - The service runs as the `strongbox` user with core dumps disabled. Full-disk encryption of the Pi's SD card or SSD is a good extra layer if you can set it up.
-- **Back up** the encrypted database off the Pi (Settings → Download a backup, or copy `/var/lib/strongbox/strongbox.db.backups/`). A backup is useless without the passphrase and key file (or the recovery key), so keep those separate from it.
+- **Back up** the encrypted database off the Pi: set a copy folder under Settings → Vault → *Also copy it to* (for example `/mnt/strongbox/Backups` on a NAS share mounted with the installer's `--share=//host/share --folder=Strongbox`), or use Settings → Download a backup, or copy `/var/lib/strongbox/strongbox.db.backups/`. A backup is useless without the passphrase and key file (or the recovery key), so keep those separate from it.
 
 ## Restore a backup
 

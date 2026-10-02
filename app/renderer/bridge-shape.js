@@ -33,6 +33,7 @@
   network: { list: 'network:list' },
   breach: { status: 'breach:status', clear: 'breach:clear' },
   files: { delete: 'files:delete' },
+  backups: { status: 'backups:status', test: 'backups:test', now: 'backups:now' },
   inbox: { add: 'inbox:add', status: 'inbox:status', next: 'inbox:next', reveal: 'inbox:reveal', decide: 'inbox:decide', clear: 'inbox:clear' },
   codes: { add: 'codes:add', replace: 'codes:replace', rename: 'codes:rename', delete: 'codes:delete', mark: 'codes:mark', reveal: 'codes:reveal', next: 'codes:next' },
   tabs: { list: 'tabs:list', save: 'tabs:save', reorder: 'tabs:reorder', delete: 'tabs:delete' },

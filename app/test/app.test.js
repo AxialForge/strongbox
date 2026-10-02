@@ -425,6 +425,62 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   assert.ok(H('tabs:list').find(t => t.builtin === 'keys').fields.find(f => f.key === 'kind').options.includes('Hardware security key'));
   assert.strictEqual(H('tabs:list').find(t => t.builtin === 'email').fields.filter(f => f.key.startsWith('recoveryto')).length, 1, 'the migration never duplicates a field that is already there');
 
+  // ---- the review queue and the archive -----------------------------------------------------------------------------
+  const { suggest, hostOf: siteHost } = require('../main/suggest');
+  assert.strictEqual(siteHost('android://abc123@com.foo.bar/'), 'com.foo.bar'); assert.strictEqual(siteHost('https://www.Chase.com:8443/login?x=1'), 'chase.com');
+  assert.deepStrictEqual([suggest({ url: 'https://www.chase.com' }).tags, suggest({ url: 'http://192.168.1.1' }).builtin, suggest({ url: 'https://router.home' }).builtin, suggest({ url: 'https://mail.google.com/gmail' }).builtin, suggest({ url: 'https://example.org' }).tags], [['banking'], 'hardware', 'hardware', 'email', []]);
+  const rq = ['name,url,username,password,note',
+    'Chase,https://www.chase.com,jdoe,password123,main account', 'Chase 2,https://chase.com/login,spouse,Zq9!vL2#mW8$xR4k,',
+    'Amazon,https://amazon.com,jdoe,amz-weak-1,', 'Router,http://192.168.1.1,admin,Rt7!kQ2#pLs9vW3z,', 'Some app,android://abc123@com.foo.bar/,app-user,Ap7!kQ2#pLs9vW3z,',
+    'Reuse,https://reuse.example.net,r1,a-new-password-99,', 'GitHub dup,https://github.com,joe,x-dup-pass-1,', ',,,,', 'Forum,https://forum.example.org,zed,,no password'].join('\n');
+  const qa = H('inbox:add', rq);
+  assert.deepStrictEqual([qa.added, qa.duplicates, qa.noName], [7, 1, 0], 'seven queued; GitHub / joe is already in the vault; a fully empty row is not even a row');
+  const statusNow = H('inbox:status'); assert.strictEqual(statusNow.pending, qa.added);
+  assert.strictEqual(H('inbox:add', rq).added, 0, 'the same file again adds nothing: every row is already queued or in the vault');
+  assert.ok(!H('entries:search', 'chase').length, 'queued logins are not in the vault: not listed, not searched'); assert.ok(!H('vault:health').weak.some(x => x.title === 'Amazon'), 'nor counted by Health');
+  const c1 = H('inbox:next');
+  assert.strictEqual(c1.done, false); assert.strictEqual(c1.card.flags.breached, true, 'the riskiest first: a famous password'); assert.strictEqual(c1.card.host, 'chase.com');
+  assert.ok(!JSON.stringify(c1).includes('password123') && !JSON.stringify(c1).includes('Zq9!vL2'), 'the card never carries the password');
+  assert.deepStrictEqual(c1.card.suggestion.tags, ['banking']); assert.strictEqual(c1.card.suggestion.tabId, web.id);
+  assert.ok(c1.card.siblings.some(x => x.kind === 'queue' && x.title === 'Chase 2'), 'the other login for the same site is shown with it');
+  assert.strictEqual(H('inbox:reveal', c1.card.id), 'password123');
+  assert.throws(() => (svc.settings.set({ vault: { noReveal: ['bob'] } }), call({ user: 'bob', role: 'standard' }, 'inbox:reveal', c1.card.id)), /not their passwords/); svc.settings.set({ vault: { noReveal: [] } });
+  // keep, with edits and a new password; the answer is learned for that site
+  let st = H('inbox:decide', c1.card.id, { action: 'keep', tabId: web.id, title: 'Chase checking', tags: ['bank', 'money'], favorite: true, password: 'Brand!New-Pass-77x' });
+  assert.deepStrictEqual([st.done, st.kept, st.pending], [1, 1, qa.added - 1]);
+  const kept1 = H('entries:search', 'Chase checking'); assert.strictEqual(kept1.length, 1);
+  const k1 = H('entries:get', kept1[0]); assert.deepStrictEqual([k1.tags.sort(), k1.favorite, k1.fields.url, k1.fields.user, k1.notes], [['bank', 'money'], true, 'https://www.chase.com', 'jdoe', 'main account']);
+  assert.strictEqual(H('entries:reveal', k1.id, 'field:pass'), 'Brand!New-Pass-77x', 'the replacement password, not the imported one');
+  let c2 = H('inbox:next'); const parked = [];
+  while (c2.card.title !== 'Chase 2') { parked.push(c2.card.title); H('inbox:decide', c2.card.id, { action: 'skip' }); c2 = H('inbox:next'); } // put the others aside until the Chase login comes up
+  assert.strictEqual(c2.card.host, 'chase.com'); assert.deepStrictEqual(c2.card.suggestion.tags.sort(), ['bank', 'money'], 'the next login from the same site is suggested like the last answer');
+  assert.ok(c2.card.siblings.some(x => x.kind === 'vault' && x.title === 'Chase checking'), 'and the vault entry for that site is listed too');
+  // archive: kept, out of every list, count and search
+  st = H('inbox:decide', c2.card.id, { action: 'archive', tabId: web.id });
+  assert.strictEqual(st.archived, 1); const arch = H('entries:archived'); assert.strictEqual(arch.length, 1); assert.strictEqual(arch[0].title, 'Chase 2');
+  assert.ok(!H('entries:list').some(e => e.id === arch[0].id) && !H('entries:search', 'Chase 2').includes(arch[0].id) && !H('vault:health').reused.some(x => x.id === arch[0].id), 'an archived entry is out of lists, search and Health');
+  assert.strictEqual(H('entries:get', arch[0].id).archived > 0, true); assert.strictEqual(H('data:dashboard').archived, 1);
+  assert.strictEqual(H('entries:archive', [arch[0].id], false), 1); assert.ok(H('entries:list').some(e => e.id === arch[0].id), 'unarchived: back in the lists'); assert.strictEqual(H('entries:archived').length, 0);
+  H('entries:archive', [arch[0].id], true);
+  assert.strictEqual(H('inbox:status').skipped, parked.length); assert.strictEqual(H('inbox:next').card.skipped, false, 'cards put aside wait until the rest are done');
+  let guard = 0, router = null, reuse = null;
+  for (;;) {
+    const n = H('inbox:next'); if (n.done || ++guard > 30) break; const c = n.card;
+    if (c.title === 'Router') { assert.strictEqual(c.suggestion.tabId, hw.id, 'a local address is suggested as Hardware'); H('inbox:decide', c.id, { action: 'keep', tabId: c.suggestion.tabId, tags: c.suggestion.tags }); router = true; }
+    else if (c.title === 'Reuse') { assert.ok(c.flags.reusedWith >= 1, 'reuse is spotted against the vault'); reuse = true; H('inbox:decide', c.id, { action: 'delete', tabId: web.id }); }
+    else if (c.title === 'Some app') { assert.strictEqual(c.host, 'com.foo.bar'); assert.deepStrictEqual(c.suggestion.tags, ['android-app']); H('inbox:decide', c.id, { action: 'keep', tabId: web.id, tags: c.suggestion.tags }); }
+    else if (c.title === 'Forum') { assert.strictEqual(c.flags.noPass, true); H('inbox:decide', c.id, { action: 'keep', tabId: web.id }); }
+    else H('inbox:decide', c.id, { action: 'delete', tabId: web.id });
+  }
+  assert.ok(router && reuse, 'both special cards were met');
+  const rr = H('entries:search', 'Router').map(i => H('entries:get', i)).find(e => e.title === 'Router'); assert.deepStrictEqual([rr.tabId, rr.fields.user, rr.notes.includes('192.168.1.1')], [hw.id, 'admin', true]); assert.strictEqual(H('entries:reveal', rr.id, 'field:pass'), 'Rt7!kQ2#pLs9vW3z');
+  const fin = H('inbox:status'); assert.deepStrictEqual([fin.pending, fin.skipped, fin.done], [0, 0, qa.added]); assert.strictEqual(H('inbox:next').done, true);
+  assert.ok(H('entries:trash').some(t => t.title === 'Reuse'), 'delete moves the entry to the trash, so it can be undone'); H('entries:purge', null);
+  assert.ok(H('vault:audit', 200).some(r => r.action === 'review_keep') && H('vault:audit', 200).some(r => r.action === 'review_archive') && !JSON.stringify(H('vault:audit', 200)).includes('password123'));
+  H('inbox:add', 'name,url,username,password\nQueued one,https://q1.example.net,u,Pq9!xxxxxxxx1\nQueued two,https://q2.example.net,u,Pq9!xxxxxxxx2'); // left waiting through a restore and a key rotation
+  svc.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); assert.ok(!allFileBytes().includes('Pq9!xxxxxxxx1') && !allFileBytes().includes('q1.example.net'), 'queued logins are encrypted on disk');
+  assert.strictEqual(H('inbox:clear').pending, 0); H('inbox:add', 'name,url,username,password\nQueued one,https://q1.example.net,u,Pq9!xxxxxxxx1\nQueued two,https://q2.example.net,u,Pq9!xxxxxxxx2');
+
   // ---- attachments: encrypted, searchable by nobody, gone with the entry ---------------------------------------
   const FILE_MARK = 'canary-file-bytes-5d2e', FILE_NAME = 'canary-name-serial-plate.png';
   const fl = svc.files.add({ user: 'joe' }, server.id, FILE_NAME, 'image/png', Buffer.from('PNGDATA ' + FILE_MARK));
@@ -446,15 +502,16 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
 
   // ---- restore a backup -----------------------------------------------------------------------------------------
   const snapshot = Buffer.from(H('vault:backup').base64, 'base64');
-  const keepCount = H('entries:list').length;
+  const keepList = H('entries:list').length, keepCount = keepList + H('entries:archived').length; // the report counts archived entries too
   const lateEntry = H('entries:save', { tabId: web.id, title: 'Added after the backup' });
   assert.throws(() => svc.restoreFile({}, Buffer.from('not a database at all'.repeat(400))), /not a Strongbox backup/);
   const rs = svc.restoreFile({ user: 'joe', ip: '10.0.0.1' }, snapshot);
   assert.strictEqual(rs.entries, keepCount); assert.strictEqual(H('vault:status').state, 'locked', 'a restore leaves the vault locked');
   assert.ok(fs.readdirSync(svc.db.file + '.backups').some(f => /pre-restore/.test(f)), 'the current database is kept first');
   await H('vault:unlock', { keyFile: kfOnly.keyFile });
-  assert.strictEqual(H('entries:list').length, keepCount); assert.ok(!H('entries:list').some(e => e.id === lateEntry.id), 'entries added after the backup are gone');
+  assert.strictEqual(H('entries:list').length, keepList); assert.ok(!H('entries:list').some(e => e.id === lateEntry.id), 'entries added after the backup are gone');
   assert.strictEqual(H('entries:reveal', server.id, 'field:pass'), 'a-new-password-99'); assert.ok(H('vault:audit', 30).some(r => r.action === 'backup_restored'));
+  assert.strictEqual(H('inbox:status').pending, 2, 'the review queue comes back with a restore'); assert.strictEqual(H('inbox:next').card.title.startsWith('Queued'), true);
 
   // ---- a hardware security key as a factor (the browser supplies a 32-byte secret; here a fixed one) --------------
   const skSecret = require('crypto').randomBytes(32).toString('base64'), skMeta = { secret: skSecret, credId: 'Y3JlZA', salt: 'c2FsdA', rpId: 'strongbox.home' };
@@ -483,6 +540,7 @@ const allFileBytes = () => { let all = ''; const walk = (d) => { for (const f of
   await fails(H('vault:unlock', { recoveryKey: sk.recoveryKey }), /Wrong/); svc.vault.fails = 0;
   await fails(H('vault:unlock', { password: 'security key passphrase', securityKey: skSecret }), /Wrong|usable|required|damaged/); svc.vault.fails = 0;
   await H('vault:unlock', { password: 'a rotated passphrase' });
+  assert.strictEqual(H('inbox:status').pending, 2); assert.strictEqual(H('inbox:reveal', H('inbox:next').card.id).startsWith('Pq9!'), true, 'and survives a key rotation');
   assert.strictEqual(H('entries:get', server.id).title, TITLE); assert.strictEqual(H('tabs:list').length >= 4, true); assert.ok(H('tags:list'), 'preferences survive too'); assert.ok(H('templates:list').length);
 
   // idle auto-lock

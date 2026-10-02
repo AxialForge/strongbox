@@ -33,10 +33,11 @@
   network: { list: 'network:list' },
   breach: { status: 'breach:status', clear: 'breach:clear' },
   files: { delete: 'files:delete' },
+  inbox: { add: 'inbox:add', status: 'inbox:status', next: 'inbox:next', reveal: 'inbox:reveal', decide: 'inbox:decide', clear: 'inbox:clear' },
   codes: { add: 'codes:add', replace: 'codes:replace', rename: 'codes:rename', delete: 'codes:delete', mark: 'codes:mark', reveal: 'codes:reveal', next: 'codes:next' },
   tabs: { list: 'tabs:list', save: 'tabs:save', reorder: 'tabs:reorder', delete: 'tabs:delete' },
   entries: {
-    list: 'entries:list', print: 'entries:print', duplicate: 'entries:duplicate', bulk: 'entries:bulk', exportCsv: 'entries:exportCsv', search: 'entries:search', get: 'entries:get', save: 'entries:save', move: 'entries:move', reveal: 'entries:reveal', totp: 'entries:totp',
+    list: 'entries:list', print: 'entries:print', duplicate: 'entries:duplicate', bulk: 'entries:bulk', archive: 'entries:archive', archived: 'entries:archived', exportCsv: 'entries:exportCsv', search: 'entries:search', get: 'entries:get', save: 'entries:save', move: 'entries:move', reveal: 'entries:reveal', totp: 'entries:totp',
     delete: 'entries:delete', trash: 'entries:trash', restore: 'entries:restore', purge: 'entries:purge', importCsv: 'entries:importCsv',
   },
 });

@@ -127,6 +127,11 @@ remembers which defaults were already offered, so a type the user deleted never 
 - **Tab field keys are stored slugged (lower-case): `recoveryTo` becomes `recoveryto`.** The default-field migration (`tabsRev`) compares `T.slug(key)`; comparing raw keys added a duplicate `recoveryto_2` to the E-mail type in a draft and made a "missing" field look absent in the test. Any code that matches a default field by key must slug it first.
 - **The default-type migration only adds**: missing fields and new choices in a `select`. It never removes or edits a field, so a field the user deleted comes back once (the cost of making new defaults reach old vaults).
 
+- **The review queue is a separate encrypted table (`inbox`), not entries with a flag.** Queued logins must stay out of every list, search, count and Health run, so they are not in `entries` at all; `inbox:decide` creates the real entry through `saveEntry` (the only place that maps an item onto a type's fields: `importTarget`). `inbox:next` decrypts the whole queue and the vault each time to score risk and find same-site entries (about 150 ms at 1,500 items); do not cache it across calls, the vault changes underneath. Delete in a review goes to the trash on purpose (undoable); skip only changes `status`.
+- **Archived is a flag inside the entry blob (`e.archived`), not a column.** `everything()` hides archived entries unless `opts.archived`; handlers that must see them pass it (duplicate checks on import, tag rename, audit titles, `entries:archived`). A new list, count or search that forgets the default would show archived entries again; a new routine that must touch every entry (a re-encryption) must ask for them.
+- **A fully blank CSV row is dropped by `parseCsv`**, so it is not counted as "no name".
+- **Suggestion rules are plain substring matches on the host** (`app/main/suggest.js`); `mail.google.com` needed its own rule. Learned rules (`prefs.domainRules`) override the built-in ones.
+
 ## Roadmap (unbuilt)
 
 - "Remember this key file on this device" (an opt-in convenience; weakens the second factor).

@@ -10,6 +10,7 @@ A LAN-only, locally encrypted vault for hardware, website, e-mail and key creden
 - **Safety net**: restore a backup from the app, rotate the encryption key, attachments, an emergency sheet, rotation reminders, a known-breached password check, read-only accounts, Wi-Fi QR codes, bulk actions.
 - **Password generator** with presets and requirements (length, required kinds of characters, the symbols a device allows).
 - **Many ways to sign in**: each account has a kind (password, PIN, fingerprint, hardware key, passkey, recovery key, or "signs in with another entry"), so one PC can hold all its logins and Plex can point at the Gmail account it uses.
+- **Review queue** for big imports (pausable, one card at a time, with suggestions and an Archive for logins you no longer use).
 - **Backup codes and recovery material**: sets of one-time codes you tick off (with a low-stock warning), security questions, app passwords, API tokens, SSH keys and recovery phrases.
 - **Specs and notes** on every entry, tags, favorites, extra logins, password history, live authenticator codes.
 - **Unlock like a Synology volume**: a passphrase, a key file, or both, plus an optional recovery key. Auto-locks when idle; a reboot locks it.
@@ -41,6 +42,7 @@ Then add the Caddy site block from [docs/RASPBERRY-PI.md](docs/RASPBERRY-PI.md).
 ## Documentation
 
 - [docs/RASPBERRY-PI.md](docs/RASPBERRY-PI.md): installing on a Pi, Caddy or built-in HTTPS, hardening, restoring a backup.
+- [docs/REVIEW-QUEUE.md](docs/REVIEW-QUEUE.md): going through a big import (hundreds or thousands of logins) one card at a time, pausing and resuming.
 - [docs/CREDENTIAL-TYPES.md](docs/CREDENTIAL-TYPES.md): backup codes, recovery phrases, security questions, tokens and the other things worth keeping, and where each goes.
 - [docs/TWO-FACTOR.md](docs/TWO-FACTOR.md): how 2FA works (TOTP, recovery codes, security keys) and where Strongbox uses it.
 

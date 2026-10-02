@@ -23,6 +23,7 @@ Glossary.add({
 
 // ---------- helpers -----------------------------------------------------------------------------------
 const DAY = 86400000;
+async function refreshReviewPill() { if (!isAdmin()) return; try { const q = await api.inbox.status(); UI.setPill('reviewPill', q.pending + q.skipped); } catch { /* locked */ } }
 const guard = (fn) => async (arg) => {
   const lock = async () => { try { SB.status = await api.vault.status(); } catch { /* keep */ } if (SB.refreshStatus) SB.refreshStatus(); return SB.lockScreen(SB.status, async () => { await SB.refreshStatus(); await loadSettings(); UI.route(); }); };
   const st = await api.vault.status(); SB.status = st;
@@ -51,6 +52,8 @@ Dash.mount({
     { type: 'due', group: 'Health', label: 'Due to change', help: 'Entries whose passwords you asked to be changed on a schedule', sizes: ['s', 'm'], def: 's', rule: { warn: 1, bad: 3 }, render: ({ d, rule }) => linkTile('#health', tile(Cards.colorFor(d.health.due, rule), 'Due to change', d.health.due, 'by your own schedule')) },
     { type: 'breached', group: 'Health', label: 'Known breached', help: 'Passwords found in a leaked-password list', sizes: ['s', 'm'], def: 's', rule: { warn: 1, bad: 1 }, render: ({ d, rule }) => linkTile('#health', tile(Cards.colorFor(d.health.breached, rule), 'Known breached', d.health.breached, 'in a leaked list')) },
     { type: 'lowcodes', group: 'Health', label: 'Backup codes running low', help: 'Sets of backup codes with only a few left', sizes: ['s', 'm'], def: 's', rule: { warn: 1, bad: 1 }, render: ({ d, rule }) => linkTile('#health', tile(Cards.colorFor(d.health.lowCodes, rule), 'Codes running low', d.health.lowCodes, 'sets almost used up')) },
+    { type: 'review', group: 'Vault', label: 'Review queue', help: 'Imported logins waiting for you to decide about them', sizes: ['s', 'm'], def: 's', rule: { warn: 1, bad: 9999 }, render: ({ d }) => linkTile('#review', tile(d.review ? 'warnt' : '', 'Review queue', d.review, d.review ? 'waiting: resume the review' : 'nothing waiting')) },
+    { type: 'archived', group: 'Vault', label: 'Archive', help: 'Entries kept but out of the way', sizes: ['s'], def: 's', render: ({ d }) => linkTile('#archive', tile('', 'Archived', d.archived, 'kept, out of the way')) },
     { type: 'trash', group: 'Vault', label: 'Trash', help: 'Deleted entries waiting to be purged', sizes: ['s'], def: 's', render: ({ d }) => linkTile('#trash', tile('', 'In the trash', d.trash, 'restorable')) },
     { type: 'bytab', group: 'Charts', label: 'Entries by type', help: 'Share of entries per type', sizes: ['m', 'l', 'xl'], def: 'l', render: ({ d }) => Cards.bars(d.perTab.map(t => ({ k: t.name, n: t.n })), 'Entries by type', { drill: false }) },
     { type: 'recent', group: 'Lists', label: 'Recently changed', help: 'The entries edited last', sizes: ['l', 'xl'], def: 'l', list: true, render: ({ d, o }) => rowsList('Recently changed', '#vault', d.recent.slice(0, o.limit || 8), r => `<tr><td class="muted nowrap">${fmtAgo(r.updated)}</td><td class="wrap">${link(r.id, r.title)}</td></tr>`) },
@@ -69,7 +72,8 @@ let selecting = false;
 const selected = new Set();
 views.vault = guard(async (arg) => {
   const v = UI.view();
-  const [tabs, list, tags, templates] = await Promise.all([api.tabs.list(), api.entries.list(), api.tags.list(), isAdmin() ? api.templates.list() : []]);
+  const [tabs, list, tags, templates, rq] = await Promise.all([api.tabs.list(), api.entries.list(), api.tags.list(), isAdmin() ? api.templates.list() : [], isAdmin() ? api.inbox.status().catch(() => null) : null]);
+  if (rq) UI.setPill('reviewPill', rq.pending + rq.skipped);
   SB.tagColors = Object.fromEntries(tags.map(t => [t.name, t.color]));
   const tabOf = new Map(tabs.map(t => [t.id, t])), byId = new Map(list.map(e => [e.id, e])), kids = new Map();
   for (const e of list) if (e.parentId && byId.has(e.parentId)) (kids.get(e.parentId) || kids.set(e.parentId, []).get(e.parentId)).push(e);
@@ -95,6 +99,7 @@ views.vault = guard(async (arg) => {
   v.innerHTML = `<h1>Vault</h1>
     <div class="tabbar"><a class="tabbtn ${tabId === 'all' ? 'on' : ''}" href="#vault/all">All <span class="count">${list.length}</span></a>${tabs.map(t => `<a class="tabbtn ${t.id === tabId ? 'on' : ''}" href="#vault/${t.id}"><i class="tdot tc-${esc(t.color || 'blue')}"></i>${esc(t.icon)} ${esc(t.name)} <span class="count">${t.count}</span></a>`).join('')}${isAdmin() ? '<a class="tabbtn plus" href="#tabs" title="Manage types">⚙</a>' : ''}</div>
     <div class="toolbar"><input type="search" id="q" placeholder="Search titles, fields, notes, tags (never secrets)" autocomplete="off"><span class="muted small" id="qcount"></span><span class="grow"></span><button class="small" id="printList" title="Print what is listed">Print…</button>${isAdmin() ? `<button class="small" id="selMode">${selecting ? 'Done selecting' : 'Select'}</button><button class="small" id="expand">Expand all</button><button class="small" id="collapse">Collapse</button><select id="newFrom" class="small" title="Start from a template"><option value="">＋ From template…</option>${templates.map(t => `<option value="${esc(t.id)}">${esc(t.name)}${t.builtin ? '' : ' (yours)'}</option>`).join('')}</select><a href="#new/${newTab}"><button class="primary">New entry</button></a>` : ''}</div>
+    ${rq && rq.pending + rq.skipped ? `<div class="rvbanner"><span>▶ <b>${UI.fmtN(rq.pending + rq.skipped)}</b> imported login${rq.pending + rq.skipped === 1 ? '' : 's'} waiting in the review queue</span><a href="#review"><button class="primary small">Resume review</button></a></div>` : ''}
     <div class="bulkbar" id="bulkbar" hidden></div>
     <div class="tagrow" id="tagrow"></div>
     <div class="card elist" id="elist"></div>`;
@@ -106,7 +111,7 @@ views.vault = guard(async (arg) => {
     const bar = $('#bulkbar');
     if (!selecting) { bar.hidden = true; return; }
     bar.hidden = false;
-    bar.innerHTML = `<b>${selected.size} selected</b><button class="small" id="bAll">All shown</button><button class="small" id="bNone">None</button><span class="grow"></span><button class="small" id="bTag" ${selected.size ? '' : 'disabled'}>Add tag…</button><button class="small" id="bUntag" ${selected.size ? '' : 'disabled'}>Remove tag…</button><button class="small" id="bMove" ${selected.size ? '' : 'disabled'}>Move…</button><button class="small" id="bFav" ${selected.size ? '' : 'disabled'}>★ Favorite</button><button class="small" id="bPrint" ${selected.size ? '' : 'disabled'}>Print…</button><button class="small danger" id="bDel" ${selected.size ? '' : 'disabled'}>Delete</button>`;
+    bar.innerHTML = `<b>${selected.size} selected</b><button class="small" id="bAll">All shown</button><button class="small" id="bNone">None</button><span class="grow"></span><button class="small" id="bTag" ${selected.size ? '' : 'disabled'}>Add tag…</button><button class="small" id="bUntag" ${selected.size ? '' : 'disabled'}>Remove tag…</button><button class="small" id="bMove" ${selected.size ? '' : 'disabled'}>Move…</button><button class="small" id="bFav" ${selected.size ? '' : 'disabled'}>★ Favorite</button><button class="small" id="bPrint" ${selected.size ? '' : 'disabled'}>Print…</button><button class="small" id="bArch" ${selected.size ? '' : 'disabled'} title="Keep, but out of the way">Archive</button><button class="small danger" id="bDel" ${selected.size ? '' : 'disabled'}>Delete</button>`;
     const ids = () => [...selected];
     const run = async (fn, msg) => { try { const n = await fn(); toast(`${msg} (${n})`); selected.clear(); UI.route(); } catch (e) { toast(e.message, true); } };
     $('#bAll').onclick = () => { shown.forEach(i => selected.add(i)); draw(); };
@@ -115,6 +120,7 @@ views.vault = guard(async (arg) => {
     $('#bUntag').onclick = () => { const t = prompt('Remove which tag from the selected entries?'); if (t && t.trim()) run(() => api.entries.bulk(ids(), 'removeTag', t), 'Tag removed'); };
     $('#bFav').onclick = () => run(() => api.entries.bulk(ids(), 'favorite', true), 'Starred');
     $('#bPrint').onclick = () => SB.printDialog(ids(), { title: `${selected.size} entries`, hasKids: true });
+    $('#bArch').onclick = () => run(() => api.entries.archive(ids(), true), 'Archived');
     $('#bDel').onclick = () => { if (confirm(`Move ${selected.size} entr${selected.size === 1 ? 'y' : 'ies'} (and anything nested in them) to the trash?`)) run(() => api.entries.bulk(ids(), 'delete'), 'Moved to the trash'); };
     $('#bMove').onclick = () => {
       const card = openModal(`<h2>Move ${selected.size} entries</h2><div class="field"><label>To type</label><select id="bmTab">${tabs.map(t => `<option value="${t.id}">${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select></div><div class="actions"><span class="grow"></span><button id="bmCancel">Cancel</button><button class="primary" id="bmGo">Move</button></div>`);
@@ -192,7 +198,7 @@ views.entry = guard(async (id) => {
   const filesCard = (e.files.length || isAdmin()) ? `<div class="card"><h3>Attachments <span class="right muted">${e.files.length || ''}</span></h3>${e.files.length ? `<table class="kv"><tbody>${e.files.map(f => `<tr><td class="wrap"><b>${esc(f.name)}</b><div class="tiny muted">${UI.fmtBytes(f.size)} · ${fmtDate(f.created)}</div></td><td class="nowrap">${e.canReveal ? `${/^image\//.test(f.type) && f.size <= 4e6 ? `<button class="small" data-fview="${f.id}">View</button> ` : ''}<button class="small" data-fget="${f.id}">Download</button>` : ''} ${isAdmin() ? `<button class="small danger" data-fdel="${f.id}" title="Remove this attachment">✕</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="muted small">Nothing attached.</div>'}${isAdmin() ? `<div class="inline" style="margin-top:8px"><button class="small" id="fPick">＋ Attach files</button><input type="file" id="fUp" multiple hidden><span class="tiny muted">serial-plate photos, config exports, licence PDFs · up to 10 MB each · encrypted like everything else</span></div>` : ''}</div>` : '';
   v.innerHTML = `<div class="crumbs"><a href="#vault/${e.tabId}">${esc(tab.icon)} ${esc(tab.name)}</a>${e.path.map(p => ` › <a href="#entry/${p.id}">${esc(p.title)}</a>`).join('')}</div>
     <div class="detail-head"><h1>${esc(e.title)} ${e.favorite ? '<span class="warn">★</span>' : ''}</h1>${e.subtitle ? `<span class="muted">${esc(e.subtitle)}</span>` : ''}<span class="grow"></span><button id="ePrint" title="Print this entry">Print…</button>${wifi ? '<button id="eQr" title="Show a QR code that joins this network">Wi-Fi QR</button>' : ''}
-      ${isAdmin() ? `<a href="#edit/${e.id}"><button class="primary">Edit</button></a><a href="#new/${e.tabId}/${e.id}"><button>Add nested</button></a><button id="eMove">Move</button><button id="eDup" title="Make a copy of this entry">Duplicate</button><button id="eTpl" title="Use this entry's structure for new ones">Save as template</button><button class="danger" id="eDel">Delete</button>` : ''}</div>
+      ${isAdmin() ? `<a href="#edit/${e.id}"><button class="primary">Edit</button></a><a href="#new/${e.tabId}/${e.id}"><button>Add nested</button></a><button id="eMove">Move</button><button id="eArch" title="Keep it, but out of every list, search and count">${e.archived ? 'Restore from archive' : 'Archive'}</button><button id="eDup" title="Make a copy of this entry">Duplicate</button><button id="eTpl" title="Use this entry's structure for new ones">Save as template</button><button class="danger" id="eDel">Delete</button>` : ''}</div>
     <div class="tiny muted" style="margin:-4px 0 10px">${e.tags.map(SB.tagBadge).join('')}${e.visibleTo.length ? `<span class="badge warn">🔒 ${e.visibleTo.length === 1 && e.visibleTo[0] === '@admins' ? 'admins only' : 'visible to ' + esc(e.visibleTo.filter(x => x !== '@admins').join(', '))}</span> ` : ''} created ${fmtDate(e.created)} · edited ${fmtAgo(e.updated)}</div>
     <div class="grid2">
       <div>
@@ -210,6 +216,9 @@ views.entry = guard(async (id) => {
       </div>
     </div>`;
   SB.wireSecrets(v, e.id);
+  if ($('#eArch')) $('#eArch').onclick = async () => { try { await api.entries.archive([e.id], !e.archived); toast(e.archived ? 'Restored from the archive' : 'Archived: kept, out of the way'); UI.route(); } catch (ex) { toast(ex.message, true); } };
+  if (e.archived) v.insertAdjacentHTML('afterbegin', `<div class="warnbox">This entry is archived since ${fmtDate(e.archived)}: kept, but left out of lists, search and Health. ${isAdmin() ? '<button class="small" id="eUnarch">Restore from archive</button>' : ''}</div>`);
+  if ($('#eUnarch')) $('#eUnarch').onclick = () => $('#eArch').click();
   if (!e.canReveal) { // an account that may look but not reveal
     $$('[data-reveal],[data-copy],[data-totp],[data-hist],[data-codeshow],[data-codenext]', v).forEach(b => b.remove()); $$('.totp', v).forEach(x => { x.textContent = '•••'; });
     v.insertAdjacentHTML('afterbegin', '<div class="warnbox">Your account can see this entry but not its passwords, keys, 2FA codes or attachments.</div>');
@@ -507,6 +516,93 @@ views.health = guard(async () => {
     ${sec('Old passwords', 'not changed for a long time', h.stale, r => `<tr><td class="wrap">${link(r.id, r.title)} <span class="muted">${esc(r.label)}</span></td><td class="nowrap warn">${r.days} days</td><td class="nowrap"><a href="#edit/${r.id}">change</a></td></tr>`)}`;
 });
 
+// ---------- archive ---------------------------------------------------------------------------------------------------------
+views.archive = guard(async () => {
+  const v = UI.view();
+  const [list, tabs] = await Promise.all([api.entries.archived(), api.tabs.list()]);
+  const tabOf = new Map(tabs.map(t => [t.id, t]));
+  v.innerHTML = `<h1>Archive</h1><p class="lead">Entries you no longer use, kept in case you ever need them. They are left out of lists, search, Health and the counts. ${list.length ? '' : 'Nothing is archived yet: use Archive on an entry, in the selection bar, or "no longer used" while reviewing an import.'}</p>
+    ${list.length ? '<div class="toolbar"><input type="search" id="arQ" placeholder="Filter the archive…" autocomplete="off"><span class="muted small" id="arCount"></span></div>' : ''}
+    <div class="card scroll-x" ${list.length ? '' : 'hidden'}><table><thead><tr><th>Entry</th><th>Type</th><th>Archived</th><th></th></tr></thead><tbody id="arBody"></tbody></table></div>`;
+  if (!list.length) return;
+  const draw = (q = '') => {
+    const rows = list.filter(e => !q || `${e.title} ${e.subtitle} ${Object.values(e.fields).join(' ')} ${e.tags.join(' ')}`.toLowerCase().includes(q.toLowerCase())).sort((a, b) => a.title.localeCompare(b.title));
+    $('#arBody').innerHTML = rows.map(e => { const t = tabOf.get(e.tabId) || { icon: '', name: '?' }; return `<tr><td class="wrap">${link(e.id, e.title)}${e.subtitle ? ` <span class="muted">${esc(e.subtitle)}</span>` : ''}<div class="tiny muted">${esc(Object.values(e.fields).slice(0, 2).join(' · '))}</div></td><td>${tabBadge(t)}</td><td class="muted nowrap">${fmtAgo(e.archived)}</td><td class="nowrap">${isAdmin() ? `<button class="small" data-un="${e.id}">Restore</button> <button class="small danger" data-tr="${e.id}">Trash</button>` : ''}</td></tr>`; }).join('') || '<tr><td colspan="4" class="muted">No match.</td></tr>';
+    $('#arCount').textContent = `${rows.length} of ${list.length}`;
+    $$('[data-un]', v).forEach(b => { b.onclick = async () => { try { await api.entries.archive([Number(b.dataset.un)], false); toast('Restored'); UI.route(); } catch (e) { toast(e.message, true); } }; });
+    $$('[data-tr]', v).forEach(b => { b.onclick = async () => { if (!confirm('Move this to the trash?')) return; try { await api.entries.delete(Number(b.dataset.tr)); toast('Moved to the trash'); UI.route(); } catch (e) { toast(e.message, true); } }; });
+  };
+  draw(); $('#arQ').oninput = (ev) => draw(ev.target.value.trim());
+});
+
+// ---------- review queue: a pausable, one-at-a-time pass over imported logins -------------------------------------------------
+let reviewKeys = false;
+views.review = guard(async () => {
+  const v = UI.view();
+  const [r, tabs, tagList] = await Promise.all([api.inbox.next(), api.tabs.list(), api.tags.list()]);
+  SB.tagColors = Object.fromEntries(tagList.map(t => [t.name, t.color]));
+  UI.setPill('reviewPill', r.status.pending + r.status.skipped);
+  const left = r.status.pending + r.status.skipped, total = left + r.status.done;
+  const progress = `<div class="rv-progress"><div class="meter"><div style="width:${total ? Math.round(r.status.done / total * 100) : 0}%"></div></div><span class="small muted">${UI.fmtN(r.status.done)} reviewed · ${UI.fmtN(left)} left${r.status.skipped ? ` (${r.status.skipped} put aside for later)` : ''}</span></div>`;
+  if (r.done) {
+    v.innerHTML = `<h1>Review</h1>${total ? progress : ''}<div class="card" style="max-width:640px">${total ? `<h3>All done ✓</h3><p>You went through ${UI.fmtN(r.status.done)} imported logins: <b>${r.status.kept}</b> kept, <b>${r.status.archived}</b> archived, <b>${r.status.deleted}</b> moved to the trash (restorable from Trash for ${(SB.settings || {}).trashDays || 'a while'} days).</p><div class="inline"><a href="#vault"><button class="primary">Open the vault</button></a><a href="#health"><button>See Health</button></a><a href="#archive"><button>Open the archive</button></a></div>` : `<h3>Nothing to review</h3><p class="muted">Imported logins wait here, outside the vault, until you decide about each one: keep it (changing its type, tags or password), mark it no longer used, delete it, or put it aside. You can stop at any point and carry on another day.</p><p>To start: <a href="#settings">Settings → Import a CSV</a>, choose your Google Passwords file, and press <b>Add to the review queue</b>.</p>`}</div>`;
+    return;
+  }
+  const c = r.card, f = c.flags, sg = c.suggestion;
+  let newPw = '';
+  const flagBadges = [f.breached ? '<span class="badge bad">Known leaked password</span>' : '', f.weak ? `<span class="badge bad">Weak (~${c.bits} bits)</span>` : '', f.reusedWith > 0 ? `<span class="badge warn">Same password as ${f.reusedWith} other login${f.reusedWith === 1 ? '' : 's'}</span>` : '', f.noPass ? '<span class="badge">No password in the export</span>' : '', c.skipped ? '<span class="badge">Put aside earlier</span>' : '', sg.reason ? `<span class="badge c1">${esc(sg.reason)}</span>` : ''].join('');
+  const tagNow = [...new Set([...(sg.tags || [])])];
+  v.innerHTML = `<h1>Review</h1>${progress}
+    <div class="rv-grid">
+      <div class="card rvcard">
+        <div class="rv-flags">${flagBadges || '<span class="muted small">No problems spotted.</span>'}</div>
+        <div class="field"><label>Title</label><input type="text" id="rvTitle" value="${esc(c.title)}" autocomplete="off"></div>
+        <div class="field"><label>Address</label><div class="inline"><input type="text" id="rvUrl" value="${esc(c.url)}" autocomplete="off" style="flex:1" spellcheck="false">${safeUrl(c.url) ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer" class="small" title="Open the site in a new tab">open ↗</a>` : ''}</div></div>
+        <div class="field"><label>User name</label><input type="text" id="rvUser" value="${esc(c.user)}" autocomplete="off" spellcheck="false"></div>
+        <div class="field"><label>Password</label><div class="inline"><span class="val mono" id="rvPwShow" data-mask="${SB.MASK}">${c.hasPass ? SB.MASK : '<span class="muted">none</span>'}</span>${c.hasPass ? '<button type="button" class="small" id="rvReveal">Show</button><button type="button" class="small" id="rvCopy">Copy</button>' : ''}<button type="button" class="small" id="rvGen">Generate a new one</button><span class="tiny muted" id="rvNew"></span></div></div>
+        <div class="field"><label>Type</label><select id="rvTab">${tabs.map(t => `<option value="${t.id}" ${t.id === sg.tabId ? 'selected' : ''}>${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select></div>
+        <div class="field"><label>Tags</label><div><input type="text" id="rvTags" value="${esc(tagNow.join(', '))}" placeholder="comma separated" autocomplete="off"><div class="tagpick">${tagList.map(t => `<a data-addtag="${esc(t.name)}">${SB.tagBadge(t.name)}</a>`).join('')}</div></div></div>
+        <div class="field"><label>Notes</label><textarea id="rvNotes" rows="2">${esc(c.notes)}</textarea></div>
+        <div class="field"><label>Favorite</label><input type="checkbox" id="rvFav"></div>
+        <div class="rv-actions"><button class="primary" id="rvKeep" title="Enter">Keep</button><button id="rvArchive" title="A">No longer used: archive</button><button class="danger" id="rvDelete" title="D">Delete</button><button id="rvSkip" title="S">Skip for now</button><span class="grow"></span><a href="#vault" title="P"><button>Pause</button></a></div>
+        <div class="tiny muted" style="margin-top:8px">Keys: <b>Enter</b> keep · <b>A</b> archive · <b>D</b> delete · <b>S</b> skip · <b>P</b> pause (when you are not typing in a box). Delete goes to the trash, so it can be undone.</div>
+        <div class="bad small" id="rvErr"></div>
+      </div>
+      <div class="card rvside"><h3>Same site <span class="right muted">${esc(c.host || '—')}</span></h3>
+        ${c.siblings.length ? c.siblings.map(x => `<div class="rv-sib"><div><b>${x.kind === 'vault' ? link(x.id, x.title) : esc(x.title)}</b>${x.sameUser ? ' <span class="badge warn">same user</span>' : ''}${x.archived ? ' <span class="badge">archived</span>' : ''}<div class="tiny muted">${x.kind === 'vault' ? `already in the vault · ${esc(x.tab || '')}` : 'waiting in this review'}${x.user ? ' · ' + esc(x.user) : ''}</div></div>${x.kind === 'queue' ? `<div class="inline"><button class="small" data-sib="${x.id}" data-do="keep">Keep</button><button class="small" data-sib="${x.id}" data-do="archive">Archive</button><button class="small danger" data-sib="${x.id}" data-do="delete">Delete</button></div>` : ''}</div>`).join('') : '<div class="muted small">No other login for this site, in the vault or in the queue.</div>'}
+        <div class="tiny muted" style="margin-top:8px">Several accounts for one site: keep the newest and archive or delete the rest. The quick buttons use the suggested type and tags.</div>
+      </div>
+    </div>`;
+  const tagsOf = () => $('#rvTags').value.split(',').map(x => x.trim()).filter(Boolean);
+  $$('[data-addtag]', v).forEach(a => { a.onclick = () => { const cur = tagsOf(); if (!cur.includes(a.dataset.addtag)) cur.push(a.dataset.addtag); $('#rvTags').value = cur.join(', '); }; });
+  if ($('#rvReveal')) {
+    const secs = Number((SB.settings || {}).revealSeconds) || 20, out = $('#rvPwShow');
+    $('#rvReveal').onclick = async () => { if (out.dataset.shown) { out.textContent = SB.MASK; delete out.dataset.shown; $('#rvReveal').textContent = 'Show'; return; } try { out.textContent = await api.inbox.reveal(c.id); out.dataset.shown = '1'; $('#rvReveal').textContent = 'Hide'; setTimeout(() => { if (out.dataset.shown) { out.textContent = SB.MASK; delete out.dataset.shown; $('#rvReveal').textContent = 'Show'; } }, secs * 1000); } catch (e) { toast(e.message, true); } };
+    $('#rvCopy').onclick = async () => { try { SB.copy(await api.inbox.reveal(c.id), 'Password copied'); } catch (e) { toast(e.message, true); } };
+  }
+  $('#rvGen').onclick = () => SB.generatorModal((pw) => { newPw = pw; $('#rvNew').textContent = `a new password will be saved (${pw.length} characters)`; });
+  const decide = async (action, id = c.id, extra = null) => {
+    $('#rvErr').textContent = '';
+    const body = extra || { action, tabId: Number($('#rvTab').value), title: $('#rvTitle').value, url: $('#rvUrl').value, user: $('#rvUser').value, notes: $('#rvNotes').value, tags: tagsOf(), favorite: $('#rvFav').checked, password: newPw || undefined };
+    try { await api.inbox.decide(id, body); } catch (e) { $('#rvErr').textContent = e.message; return; }
+    UI.route();
+  };
+  $('#rvKeep').onclick = () => decide('keep'); $('#rvArchive').onclick = () => decide('archive'); $('#rvDelete').onclick = () => decide('delete'); $('#rvSkip').onclick = () => decide('skip');
+  $$('[data-sib]', v).forEach(b => { b.onclick = () => decide(b.dataset.do, Number(b.dataset.sib), { action: b.dataset.do, tabId: sg.tabId, tags: sg.tags }); });
+  $('#rvTitle').focus();
+  if (!reviewKeys) {
+    reviewKeys = true;
+    document.addEventListener('keydown', (ev) => {
+      if (UI.current() !== 'review' || !$('#rvKeep') || !$('#modal').hidden || ev.altKey || ev.metaKey) return;
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName);
+      if (ev.key === 'Enter' && (ev.ctrlKey || (typing && ev.target.tagName === 'INPUT'))) { ev.preventDefault(); $('#rvKeep').click(); return; }
+      if (typing || ev.ctrlKey) return;
+      const k = ev.key.toLowerCase();
+      if (k === 'enter' || k === 'k') { ev.preventDefault(); $('#rvKeep').click(); } else if (k === 'a') $('#rvArchive').click(); else if (k === 'd') $('#rvDelete').click(); else if (k === 's') $('#rvSkip').click(); else if (k === 'p') location.hash = '#vault';
+    });
+  }
+});
+
 // ---------- trash ---------------------------------------------------------------------------------------------------
 views.trash = guard(async () => {
   const v = UI.view();
@@ -520,7 +616,7 @@ views.trash = guard(async () => {
 });
 
 // ---------- activity (the vault's own audit trail) ----------------------------------------------------------------------
-const ACTIONS = { vault_created: 'Vault created', unlock: 'Unlocked', unlock_failed: 'Failed unlock', unlock_blocked: 'Unlock blocked (too many failures)', lock: 'Locked', autolock: 'Auto-locked (idle)', reveal: 'Secret shown or copied', totp: 'Authenticator code shown', entry_created: 'Entry created', entry_saved: 'Entry edited', entry_moved: 'Entry moved', entry_trashed: 'Moved to trash', entry_restored: 'Restored from trash', entries_purged: 'Deleted for good', csv_import: 'CSV imported', print: 'Printed', codes_added: 'Backup codes added', codes_replaced: 'Backup codes replaced', codes_renamed: 'Backup codes renamed', codes_deleted: 'Backup codes deleted', codes_marked: 'Backup code ticked', codes_used: 'Backup code used', file_added: 'Attachment added', file_downloaded: 'Attachment downloaded', file_deleted: 'Attachment deleted', backup_restored: 'Backup restored', data_key_rotated: 'Encryption key rotated', breach_list_loaded: 'Breached-password list loaded', breach_list_cleared: 'Breached-password list removed', bulk_addTag: 'Tag added in bulk', bulk_removeTag: 'Tag removed in bulk', bulk_move: 'Moved in bulk', bulk_delete: 'Deleted in bulk', bulk_favorite: 'Favorites changed in bulk', tag_saved: 'Tag changed', tag_deleted: 'Tag removed', template_saved: 'Template saved', template_deleted: 'Template removed', csv_export: 'CSV exported', tab_created: 'Type created', tab_saved: 'Type edited', tab_deleted: 'Type deleted', unlock_method_changed: 'Unlock method changed', recovery_key_renewed: 'New recovery key', backup_downloaded: 'Backup downloaded', vault_reset: 'Empty vault reset' };
+const ACTIONS = { vault_created: 'Vault created', unlock: 'Unlocked', unlock_failed: 'Failed unlock', unlock_blocked: 'Unlock blocked (too many failures)', lock: 'Locked', autolock: 'Auto-locked (idle)', reveal: 'Secret shown or copied', totp: 'Authenticator code shown', entry_created: 'Entry created', entry_saved: 'Entry edited', entry_moved: 'Entry moved', entry_trashed: 'Moved to trash', entry_restored: 'Restored from trash', entries_purged: 'Deleted for good', csv_import: 'CSV imported', print: 'Printed', review_queued: 'Imports queued for review', review_keep: 'Review: kept', review_archive: 'Review: archived', review_delete: 'Review: deleted', review_cleared: 'Review queue cleared', entries_archived: 'Archived', entries_unarchived: 'Restored from archive', codes_added: 'Backup codes added', codes_replaced: 'Backup codes replaced', codes_renamed: 'Backup codes renamed', codes_deleted: 'Backup codes deleted', codes_marked: 'Backup code ticked', codes_used: 'Backup code used', file_added: 'Attachment added', file_downloaded: 'Attachment downloaded', file_deleted: 'Attachment deleted', backup_restored: 'Backup restored', data_key_rotated: 'Encryption key rotated', breach_list_loaded: 'Breached-password list loaded', breach_list_cleared: 'Breached-password list removed', bulk_addTag: 'Tag added in bulk', bulk_removeTag: 'Tag removed in bulk', bulk_move: 'Moved in bulk', bulk_delete: 'Deleted in bulk', bulk_favorite: 'Favorites changed in bulk', tag_saved: 'Tag changed', tag_deleted: 'Tag removed', template_saved: 'Template saved', template_deleted: 'Template removed', csv_export: 'CSV exported', tab_created: 'Type created', tab_saved: 'Type edited', tab_deleted: 'Type deleted', unlock_method_changed: 'Unlock method changed', recovery_key_renewed: 'New recovery key', backup_downloaded: 'Backup downloaded', vault_reset: 'Empty vault reset' };
 views.activity = guard(async () => {
   const v = UI.view();
   const rows = await api.vault.audit(500);
@@ -557,8 +653,9 @@ views.settings = guard(async () => {
     <div class="section-head"><h2>Backup and import</h2></div>
     <div class="card">
       <div class="field"><label>Encrypted backup</label><div><button id="sBackup">Download a backup</button><div class="hint">A complete copy of the database. It is still encrypted: restoring it needs the same passphrase and key file (or the recovery key). To restore, stop the service and replace <span class="mono">strongbox.db</span>.</div></div></div>
-      <div class="field"><label>Import a CSV</label><div><div class="inline"><select id="iTab">${tabs.map(t => `<option value="${t.id}">${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select><input type="file" id="iFile" accept=".csv,text/csv"><button id="iGo">Preview…</button></div><div class="hint">Works with exports from <b>Google Password Manager</b> (passwords.google.com → Settings → Export passwords), Chrome, Edge, Firefox, Bitwarden, 1Password, LastPass and KeePass. You get a preview first, and duplicates are skipped. <b>Delete the CSV afterwards</b>: it holds every password in clear text.</div></div></div>
+      <div class="field"><label>Import a CSV</label><div><div class="inline"><select id="iTab">${tabs.map(t => `<option value="${t.id}">${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select><input type="file" id="iFile" accept=".csv,text/csv"><button id="iGo">Preview…</button></div><div class="hint">Works with exports from <b>Google Password Manager</b> (passwords.google.com → Settings → Export passwords), Chrome, Edge, Firefox, Bitwarden, 1Password, LastPass and KeePass. You get a preview first, and duplicates are skipped. Big files are best sent to the <b>review queue</b>: you go through the logins one by one, and can stop and carry on any day. <b>Delete the CSV afterwards</b>: it holds every password in clear text.</div></div></div>
       <div class="field"><label>Export a CSV</label><div><div class="inline"><select id="xTab">${tabs.map(t => `<option value="${t.id}" ${t.builtin === 'websites' ? 'selected' : ''}>${esc(t.icon)} ${esc(t.name)}</option>`).join('')}</select><button id="xGo">Export…</button></div><div class="hint">name, url, username, password, note: the format Google Password Manager, Chrome, Edge, Firefox and Bitwarden import (passwords.google.com → Settings → Import). Each extra account on an entry becomes its own row. <b>The file holds passwords in clear text</b>: this asks for your account password again and is logged.</div></div></div>
+      <div class="field"><label>Review queue</label><div><span class="small" id="rqSt">…</span><div class="inline" style="margin-top:6px"><a href="#review"><button>Open the review</button></a><button class="small danger" id="rqClear">Clear the queue</button></div><div class="hint">Imported logins waiting for you to decide. Clearing it discards the ones not yet reviewed (they are not in the vault).</div></div></div>
       ${stats.entries === 0 ? '<div class="field"><label>Start over</label><div><button class="danger" id="sReset">Reset the empty vault</button><div class="hint">Only offered while the vault holds no entries: lets you choose a different unlock method from scratch.</div></div></div>' : ''}
     </div>
     <div class="section-head"><h2>Safety net</h2></div>
@@ -576,6 +673,8 @@ views.settings = guard(async () => {
   const save = async (patch, msg = 'Saved') => { try { const r = await api.settings.set(patch); SB.settings = r.vault; toast(msg); } catch (e) { toast(e.message, true); } };
   $('#vSave').onclick = () => save({ vault: { autoLockMinutes: Number($('#vAuto').value), clipboardClearSeconds: Number($('#vClip').value), revealSeconds: Number($('#vReveal').value), staleDays: Number($('#vStale').value), weakBits: Number($('#vWeak').value), expiringDays: Number($('#vExp').value), lowCodes: Number($('#vLow').value), trashDays: Number($('#vTrash').value) }, backup: { time: $('#gBackup').value } });
   notif.wire(save); ha.wire(); look.wire();
+  api.inbox.status().then(q => { $('#rqSt').textContent = q.pending + q.skipped ? `${q.pending + q.skipped} waiting (${q.done} already reviewed: ${q.kept} kept, ${q.archived} archived, ${q.deleted} deleted).` : q.done ? `Nothing waiting. ${q.done} reviewed so far.` : 'Nothing waiting.'; }).catch(() => {});
+  $('#rqClear').onclick = async () => { if (!confirm('Discard every login still waiting in the review queue? They are not in the vault, so this cannot be undone.')) return; try { await api.inbox.clear(); toast('Review queue cleared'); UI.route(); } catch (e) { toast(e.message, true); } };
   $('#rsGo').onclick = async () => {
     const f = $('#rsFile').files[0]; if (!f) return toast('Choose a backup file first', true);
     if (!confirm(`Replace the whole vault with "${f.name}"?\n\nEverything now in the vault is kept as a pre-restore backup, but the vault will lock and open with the backup's own passphrase, key file or recovery key.`)) return;
@@ -610,8 +709,9 @@ views.settings = guard(async () => {
       <div class="muted small" style="margin:8px 0">Mapped to: ${Object.entries(pv.mapped).map(([k, v]) => `${esc(k)} → <b>${esc(v)}</b>`).join(' · ') || 'nothing; this type has no matching fields'}</div>
       <div class="scroll-x"><table><thead><tr><th>Title</th><th>Address</th><th>User</th><th>Password</th></tr></thead><tbody>${pv.sample.map(r => `<tr><td>${esc(r.title)}</td><td class="muted">${esc(r.url)}</td><td>${esc(r.user)}</td><td>${r.password ? '••••••' : '<span class="muted">none</span>'}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Nothing to add.</td></tr>'}</tbody></table></div>
       <div class="field" style="margin-top:10px"><label>Duplicates</label><label class="inline small"><input type="checkbox" id="ivSkip" checked> skip entries that already exist (same site and user name)</label></div>
-      <div class="actions"><span class="grow"></span><button id="ivCancel">Cancel</button><button class="primary" id="ivGo" ${pv.willAdd || pv.duplicates ? '' : 'disabled'}>Import</button></div>`);
+      <div class="actions"><span class="grow"></span><button id="ivCancel">Cancel</button><button class="${pv.willAdd > 60 ? 'primary' : ''}" id="ivQueue" ${pv.willAdd || pv.duplicates ? '' : 'disabled'} title="Go through them one by one afterwards: change the type, tags or password, archive or delete the ones you no longer use">Add to the review queue</button><button class="${pv.willAdd > 60 ? '' : 'primary'}" id="ivGo" ${pv.willAdd || pv.duplicates ? '' : 'disabled'}>Import straight in</button></div><div class="hint tiny muted" style="margin-top:6px">${pv.willAdd > 60 ? 'That is a lot of logins. The review queue keeps them out of the vault until you decide about each one, and you can stop and carry on any day.' : 'Few logins: importing straight in is fine.'}</div>`);
     $('#ivCancel', card).onclick = closeModal;
+    $('#ivQueue', card).onclick = async () => { try { const r = await api.inbox.add(text, { skipDuplicates: $('#ivSkip', card).checked }); closeModal(); toast(`${r.added} waiting for review${r.duplicates ? `, ${r.duplicates} duplicates skipped` : ''}. Now delete that CSV file.`); location.hash = '#review'; } catch (e) { toast(e.message, true); } };
     $('#ivGo', card).onclick = async () => { try { const r = await api.entries.importCsv(tabId, text, { skipDuplicates: $('#ivSkip', card).checked }); closeModal(); toast(`${r.added} imported${r.duplicates ? `, ${r.duplicates} duplicates skipped` : ''}. Now delete that CSV file.`); } catch (e) { toast(e.message, true); } };
   };
   $('#xGo').onclick = async () => {
@@ -734,7 +834,9 @@ UI.init({
       { view: 'vault', label: 'Vault', icon: '⚿' },
       { view: 'network', label: 'Network', icon: '⇄' },
       { view: 'generator', label: 'Generator', icon: '✦' },
+      { view: 'review', label: 'Review', icon: '✔', roles: ['admin'], pill: 'reviewPill', pillClass: 'accent' },
       { view: 'health', label: 'Health', icon: '♥' },
+      { view: 'archive', label: 'Archive', icon: '▣' },
       { view: 'trash', label: 'Trash', icon: '⌫' },
     ] },
     { group: 'Manage', items: [
@@ -754,12 +856,12 @@ UI.init({
   // `entry`, `edit` and `new` are pages reached from lists, not sidebar items; this keeps their routes allowed for the roles that may see them.
   standardRoleText: 'open the vault and read it (every look at a secret is logged), but not add, edit or delete.',
   logHint: 'on the Pi also: journalctl -u strongbox -f',
-  onReady: async () => { await loadSettings(); SB.lockBox(); },
+  onReady: async () => { await loadSettings(); SB.lockBox(); refreshReviewPill(); },
 });
 
 // ---------- keyboard: / search, n new entry, ? help -------------------------------------------------------------------
 document.addEventListener('keydown', (ev) => {
-  if (ev.ctrlKey || ev.metaKey || ev.altKey || !SB.status || SB.status.state !== 'unlocked') return;
+  if (ev.ctrlKey || ev.metaKey || ev.altKey || !SB.status || SB.status.state !== 'unlocked' || UI.current() === 'review') return;
   const t = ev.target; if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
   if (!$('#modal').hidden) return;
   if (ev.key === '/') { ev.preventDefault(); if (UI.current() !== 'vault') location.hash = '#vault'; setTimeout(() => { const q = $('#q'); if (q) q.focus(); }, UI.current() === 'vault' ? 0 : 500); }

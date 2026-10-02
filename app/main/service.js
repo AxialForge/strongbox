@@ -17,6 +17,7 @@ const { Vault } = require('./vault');
 const T = require('./templates');
 const { parseCsv, mapHeaders, detectFormat } = require('./csvin');
 const { csv } = require('../../kit/main/csv');
+const { suggest, hostOf: siteOf } = require('./suggest');
 
 const DAY = 86400000;
 const LOCKED = 'The vault is locked';
@@ -42,6 +43,13 @@ CREATE TABLE IF NOT EXISTS prefs (
   k     TEXT PRIMARY KEY,
   blob  BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS inbox (
+  id      INTEGER PRIMARY KEY,
+  created INTEGER NOT NULL,
+  status  TEXT NOT NULL DEFAULT 'pending',
+  blob    BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS inbox_status ON inbox(status);
 CREATE TABLE IF NOT EXISTS files (
   id        INTEGER PRIMARY KEY,
   entry_id  INTEGER NOT NULL,
@@ -95,9 +103,10 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   const tabMap = () => new Map(tabList().map(t => [t.id, t]));
   const rowOf = (id) => db.get('SELECT * FROM entries WHERE id=?', Number(id));
   const openEntry = (r) => vault.open(r.blob, `entry/${r.id}`);
-  const blank = () => ({ title: '', subtitle: '', fields: {}, creds: [], specs: [], nics: [], notes: '', tags: [], favorite: false, rotateDays: 0, visibleTo: [], codeSets: [], questions: [], changed: {}, hist: {} });
+  const blank = () => ({ title: '', subtitle: '', fields: {}, creds: [], specs: [], nics: [], notes: '', tags: [], favorite: false, rotateDays: 0, visibleTo: [], codeSets: [], questions: [], archived: null, changed: {}, hist: {} });
   /** Everything not in the trash, decrypted: [{ row, e }]. */
-  const everything = (trash = false, a = null) => db.all(`SELECT * FROM entries WHERE deleted IS ${trash ? 'NOT ' : ''}NULL ORDER BY id`).map(row => ({ row, e: { ...blank(), ...openEntry(row) } })).filter(x => !a || canSee(a, x.e));
+  // Archived entries are left out unless asked for (opts.archived): they are kept, but out of every list, search and count.
+  const everything = (trash = false, a = null, opts = {}) => db.all(`SELECT * FROM entries WHERE deleted IS ${trash ? 'NOT ' : ''}NULL ORDER BY id`).map(row => ({ row, e: { ...blank(), ...openEntry(row) } })).filter(x => !a || canSee(a, x.e)).filter(x => opts.archived || !x.e.archived);
   const tabOfRow = (row, tabs) => tabs.get(row.tab_id) || { id: row.tab_id, name: '(missing tab)', icon: '?', fields: [] };
 
   const plainFields = (e, tab, full) => {
@@ -112,7 +121,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   };
   // The secret a row's copy button copies: the first password that is set, else the first login's.
   const quickRef = (e, tab) => { const fd = tab.fields.find(f => f.type === 'password' && e.fields[f.key]); if (fd) return 'field:' + fd.key; const c = e.creds.find(x => x.secret); return c ? 'cred:' + c.id : null; };
-  const light = (row, e, tab) => ({ id: row.id, tabId: row.tab_id, parentId: row.parent_id, title: e.title, subtitle: e.subtitle, tags: e.tags, favorite: !!e.favorite, created: row.created, updated: row.updated, fields: plainFields(e, tab, false), accounts: e.creds.length, rotateDays: e.rotateDays || 0, restricted: !!(e.visibleTo && e.visibleTo.length), quick: quickRef(e, tab) });
+  const light = (row, e, tab) => ({ id: row.id, tabId: row.tab_id, parentId: row.parent_id, title: e.title, subtitle: e.subtitle, tags: e.tags, favorite: !!e.favorite, created: row.created, updated: row.updated, fields: plainFields(e, tab, false), accounts: e.creds.length, rotateDays: e.rotateDays || 0, restricted: !!(e.visibleTo && e.visibleTo.length), archived: e.archived || null, quick: quickRef(e, tab) });
   function full(row, e, tab, a = null) {
     const secrets = {};
     for (const fd of tab.fields) {
@@ -431,7 +440,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
     return n;
   });
   // CSV in: one planning pass (format, mapping, duplicates), then either a preview or the writes.
-  const hostOf = (u) => String(u || '').toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').replace(/[/?#].*$/, '');
+  const hostOf = siteOf;
   function planImport(tab, text, skipDuplicates) {
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error('The file has no rows');
@@ -444,7 +453,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       pass: find(fd => fd.type === 'password'), totp: find(fd => fd.type === 'totp'),
     };
     const sig = (title, url, user) => (hostOf(url) || String(title).toLowerCase()) + '|' + String(user || '').toLowerCase();
-    const have = new Set(everything().filter(x => x.row.tab_id === tab.id).map(({ e }) => sig(e.title, target.url && e.fields[target.url.key], target.user && e.fields[target.user.key])));
+    const have = new Set(everything(false, null, { archived: true }).filter(x => x.row.tab_id === tab.id).map(({ e }) => sig(e.title, target.url && e.fields[target.url.key], target.user && e.fields[target.user.key])));
     const out = { format: detectFormat(rows[0]), total: rows.length - 1, items: [], duplicates: 0, noName: 0, otherKinds: 0, mapped: Object.fromEntries(Object.entries(target).filter(([, v]) => v).map(([k, v]) => [k, v.label])), sample: [] };
     for (const r of rows.slice(1)) {
       const val = (k) => (h[k] === undefined ? '' : String(r[h[k]] || '').trim());
@@ -507,7 +516,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   /** Re-seals every entry (trash included) that `fn(e)` changed in place; returns how many. */
   function mutateEntries(fn) {
     let n = 0;
-    db.transaction(() => { for (const { row, e } of everything().concat(everything(true))) if (fn(e)) { db.run('UPDATE entries SET blob=? WHERE id=?', vault.seal(e, `entry/${row.id}`), row.id); n++; } });
+    db.transaction(() => { for (const { row, e } of everything(false, null, { archived: true }).concat(everything(true, null, { archived: true }))) if (fn(e)) { db.run('UPDATE entries SET blob=? WHERE id=?', vault.seal(e, `entry/${row.id}`), row.id); n++; } });
     return n;
   }
   const listTags = (a = null) => {
@@ -670,13 +679,15 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       recent: [...list].sort((x, y) => y.row.updated - x.row.updated).slice(0, 8).map(brief),
       favorites: list.filter(x => x.e.favorite).slice(0, 12).map(brief),
       trash: a && a.role && a.role !== 'admin' ? 0 : db.get('SELECT COUNT(*) n FROM entries WHERE deleted IS NOT NULL').n,
+      archived: everything(false, a, { archived: true }).filter(x => x.e.archived).length,
+      review: a && a.role && a.role !== 'admin' ? 0 : db.get("SELECT COUNT(*) n FROM inbox WHERE status='pending'").n,
     };
   }, { data: false });
   // Home Assistant status: counts only, from the last time the vault was open. Never any content.
-  api('data:status', () => { const st = vault.status(), c = db.kvGet('healthCache', {}) || {}; return { app: meta.name, state: st.state, entries: c.total ?? null, weak: c.weak ?? null, reused: c.reused ?? null, stale: c.stale ?? null, expiring: c.expiring ?? null, due: c.due ?? null, breached: c.breached ?? null, low_codes: c.lowCodes ?? null, checked_at: c.at ? new Date(c.at).toISOString() : null }; }, { data: false });
+  api('data:status', () => { const st = vault.status(), c = db.kvGet('healthCache', {}) || {}; return { app: meta.name, state: st.state, entries: c.total ?? null, weak: c.weak ?? null, reused: c.reused ?? null, stale: c.stale ?? null, expiring: c.expiring ?? null, due: c.due ?? null, breached: c.breached ?? null, low_codes: c.lowCodes ?? null, review_pending: db.get("SELECT COUNT(*) n FROM inbox WHERE status='pending'").n, checked_at: c.at ? new Date(c.at).toISOString() : null }; }, { data: false });
   api('vault:audit', (a, limit = 300) => {
     const titles = new Map(); const tabs = tabMap();
-    for (const { row, e } of everything().concat(everything(true))) titles.set(row.id, { title: e.title, tab: tabOfRow(row, tabs).name });
+    for (const { row, e } of everything(false, null, { archived: true }).concat(everything(true, null, { archived: true }))) titles.set(row.id, { title: e.title, tab: tabOfRow(row, tabs).name });
     return db.all('SELECT * FROM vault_audit ORDER BY id DESC LIMIT ?', Math.min(Number(limit) || 300, 2000)).map(r => ({ ...r, entry: r.entry_id ? (titles.get(r.entry_id) || { title: `#${r.entry_id} (removed)`, tab: '' }) : null }));
   });
 
@@ -705,7 +716,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   api('vault:newRecovery', async (a) => { const r = await vault.newRecovery(); audit(a, 'recovery_key_renewed'); return r; }, { data: false });
   api('vault:resetEmpty', (a) => {
     if (db.get('SELECT COUNT(*) n FROM entries').n) throw new Error('The vault holds entries; a reset would destroy them. Restore from a backup instead.');
-    db.transaction(() => { db.run('DELETE FROM tabs'); db.run('DELETE FROM files'); db.run('DELETE FROM prefs'); db.run('DELETE FROM vault_meta'); db.run("DELETE FROM kv WHERE k='seededTabs'"); });
+    db.transaction(() => { db.run('DELETE FROM tabs'); db.run('DELETE FROM inbox'); db.run("DELETE FROM kv WHERE k='inboxStats'"); db.run('DELETE FROM files'); db.run('DELETE FROM prefs'); db.run('DELETE FROM vault_meta'); db.run("DELETE FROM kv WHERE k='seededTabs'"); });
     vault.lock('reset'); audit(a, 'vault_reset'); changed();
     return true;
   }, { data: false });
@@ -754,6 +765,129 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
   api('codes:next', (a, id, setId) => {
     denyReveal(a);
     return withEntry(a, id, (e) => { const cs = setOf(e, setId), cd = cs.codes.find(x => !x.used); if (!cd) throw new Error('Every code in this set is used up'); cd.used = Date.now(); return { code: cd.c, left: cs.codes.filter(x => !x.used).length, total: cs.codes.length }; }, 'codes_used');
+  });
+
+  // ---- archive: kept, but out of the way ----------------------------------------------------------
+  function setArchived(id, on, now = Date.now()) {
+    const row = rowOf(id); if (!row) return false;
+    const e = { ...blank(), ...openEntry(row) }; e.archived = on ? now : null;
+    db.run('UPDATE entries SET blob=?, updated=? WHERE id=?', vault.seal(e, `entry/${row.id}`), now, row.id);
+    return true;
+  }
+  api('entries:archive', (a, ids, on = true) => {
+    const all = new Set(); for (const id of (Array.isArray(ids) ? ids : [ids]).slice(0, 2000)) { const row = rowOf(id); if (!row || row.deleted) continue; all.add(row.id); for (const d of descendants(row.id)) all.add(d); }
+    db.transaction(() => { for (const i of all) setArchived(i, !!on); });
+    audit(a, on ? 'entries_archived' : 'entries_unarchived', null, `${all.size} entr${all.size === 1 ? 'y' : 'ies'}`); changed();
+    return all.size;
+  });
+  api('entries:archived', (a) => { const tabs = tabMap(); return everything(false, a, { archived: true }).filter(x => x.e.archived).map(({ row, e }) => light(row, e, tabOfRow(row, tabs))); });
+
+  // ---- the review queue: imported logins wait here, outside the vault, until you decide about each one ------------
+  // inbox(id, created, status 'pending' | 'skipped', blob) where blob = { title, url, user, pass, totp, notes, folder }.
+  // Decisions: keep, archive (no longer in use), delete (to the trash, so it can be undone) or skip (later). The queue persists, so a
+  // review can stop and resume across days. Order: the riskiest passwords first, then by site.
+  const ibStats = () => db.kvGet('inboxStats', null) || { done: 0, kept: 0, archived: 0, deleted: 0 };
+  const inboxStatus = () => ({ pending: db.get("SELECT COUNT(*) n FROM inbox WHERE status='pending'").n, skipped: db.get("SELECT COUNT(*) n FROM inbox WHERE status='skipped'").n, ...ibStats() });
+  const importTarget = (tab) => {
+    const find = (pred) => tab.fields.find(pred);
+    return { url: find(fd => fd.type === 'url'), user: find(fd => fd.key === 'user') || find(fd => /user|login|address/i.test(fd.label) && fd.type === 'text'), pass: find(fd => fd.type === 'password'), totp: find(fd => fd.type === 'totp') };
+  };
+  const pwHash = (v) => crypto.createHmac('sha256', vault.ek).update(String(v)).digest('hex');
+  function queueRows() { return db.all('SELECT id, created, status, blob FROM inbox ORDER BY id').map(r => ({ row: r, item: vault.open(r.blob, `inbox/${r.id}`) })); }
+  api('inbox:add', (a, text, opts = {}) => {
+    const rows = parseCsv(text);
+    if (rows.length < 2) throw new Error('The file has no rows');
+    if (rows.length > 5001) throw new Error('At most 5000 rows at a time: split the file');
+    const h = mapHeaders(rows[0]);
+    if (h.title === undefined && h.url === undefined) throw new Error('No name or url column found in the first row');
+    const sig = (it) => (siteOf(it.url) || String(it.title).toLowerCase()) + '|' + String(it.user || '').toLowerCase();
+    const tabsNow = tabMap();
+    const have = new Set(everything(false, null, { archived: true }).map(({ row, e }) => { const tab = tabOfRow(row, tabsNow), urlF = tab.fields.find(fd => fd.type === 'url'), uf = userFieldOf(tab); return sig({ title: e.title, url: urlF ? e.fields[urlF.key] : '', user: uf ? e.fields[uf.key] : '' }); }));
+    for (const q of queueRows()) have.add(sig(q.item));
+    const res = { format: detectFormat(rows[0]), total: rows.length - 1, added: 0, duplicates: 0, noName: 0, otherKinds: 0 };
+    const skipDup = opts.skipDuplicates !== false, now = Date.now();
+    db.transaction(() => {
+      for (const r of rows.slice(1)) {
+        const val = (k) => (h[k] === undefined ? '' : String(r[h[k]] || '').trim());
+        if (h.kind !== undefined && val('kind') && val('kind').toLowerCase() !== 'login') { res.otherKinds++; continue; }
+        const item = { url: clip(val('url'), 500), user: clip(val('user'), 200), pass: clip(val('pass'), 2000), totp: clip(val('totp'), 400), notes: clip(val('notes'), 20000), folder: clip(val('folder'), 40).trim().toLowerCase() };
+        item.title = clip(val('title') || (/^android:\/\//i.test(item.url) ? siteOf(item.url) : siteOf(item.url)), 200);
+        if (!item.title) { res.noName++; continue; }
+        const s = sig(item); if (skipDup && have.has(s)) { res.duplicates++; continue; } have.add(s);
+        const id = Number(db.run('INSERT INTO inbox(created, status, blob) VALUES(?,?,?)', now, 'pending', EMPTY).lastInsertRowid);
+        db.run('UPDATE inbox SET blob=? WHERE id=?', vault.seal(item, `inbox/${id}`), id); res.added++;
+      }
+    });
+    audit(a, 'review_queued', null, `${res.added} queued, ${res.duplicates} duplicates skipped (${res.format})`); changed();
+    return { ...res, status: inboxStatus() };
+  });
+  api('inbox:status', () => inboxStatus());
+  api('inbox:clear', (a) => { const n = db.get('SELECT COUNT(*) n FROM inbox').n; db.run('DELETE FROM inbox'); db.kvSet('inboxStats', { done: 0, kept: 0, archived: 0, deleted: 0 }); audit(a, 'review_cleared', null, `${n} item(s) discarded`); changed(); return inboxStatus(); });
+  api('inbox:reveal', (a, id) => {
+    denyReveal(a);
+    const r = db.get('SELECT id, blob FROM inbox WHERE id=?', Number(id)); if (!r) throw new Error('That item is already done');
+    const it = vault.open(r.blob, `inbox/${r.id}`); if (!it.pass) throw new Error('That item has no password');
+    audit(a, 'reveal', null, 'inbox item'); return it.pass;
+  });
+  api('inbox:next', (a, opts = {}) => {
+    const tabs = tabMap(), tabList_ = [...tabs.values()], learned = (getPref('domainRules', {}) || {});
+    const queue = queueRows(), vaultAll = everything(false, null, { archived: true });
+    const vh = new Map(), qh = new Map(), byHost = new Map();
+    for (const { row, e } of vaultAll) {
+      const tab = tabOfRow(row, tabs);
+      for (const fd of tab.fields) if (fd.type === 'password' && e.fields[fd.key]) { const k = pwHash(e.fields[fd.key]); vh.set(k, (vh.get(k) || 0) + 1); }
+      for (const c of e.creds) if (c.secret && ['password', 'other'].includes(c.kind || 'password')) { const k = pwHash(c.secret); vh.set(k, (vh.get(k) || 0) + 1); }
+      const uf = userFieldOf(tab), urlF = tab.fields.find(fd => fd.type === 'url'), host = urlF ? siteOf(e.fields[urlF.key]) : '';
+      if (host) (byHost.get(host) || byHost.set(host, []).get(host)).push({ kind: 'vault', id: row.id, title: e.title, user: uf ? e.fields[uf.key] || '' : '', tab: tab.name, archived: !!e.archived });
+    }
+    for (const { item } of queue) if (item.pass) { const k = pwHash(item.pass); qh.set(k, (qh.get(k) || 0) + 1); }
+    const qHost = new Map();
+    for (const q of queue) { const h = siteOf(q.item.url); if (h) (qHost.get(h) || qHost.set(h, []).get(h)).push(q); }
+    const weakBits = Number(cfg().weakBits) || 50;
+    const scored = queue.map(q => {
+      const it = q.item, bits = it.pass ? T.strengthBits(it.pass) : 0, k = it.pass ? pwHash(it.pass) : null;
+      const reusedWith = k ? (vh.get(k) || 0) + (qh.get(k) || 1) - 1 : 0, breached = it.pass ? isBreached(it.pass) : false, weak = !!it.pass && bits < weakBits;
+      return { q, bits, reusedWith, breached, weak, noPass: !it.pass, risk: (breached ? 4 : 0) + (weak ? 2 : 0) + (reusedWith > 0 ? 2 : 0) };
+    });
+    const rank = (x) => [x.q.row.status === 'skipped' ? 1 : 0, -x.risk, siteOf(x.q.item.url) || x.q.item.title.toLowerCase(), x.q.item.title.toLowerCase(), x.q.row.id];
+    scored.sort((x, y) => { const rx = rank(x), ry = rank(y); for (let i = 0; i < rx.length; i++) { if (rx[i] < ry[i]) return -1; if (rx[i] > ry[i]) return 1; } return 0; });
+    const status = inboxStatus();
+    const first = scored[0]; if (!first) return { done: true, status };
+    const it = first.q.item, host = siteOf(it.url), sg = suggest(it, learned);
+    const wanted = sg.learned ? tabs.get(sg.learned.tabId) : tabList_.find(t => t.builtin === sg.builtin);
+    const suggestion = { tabId: (wanted || tabList_.find(t => t.builtin === 'websites') || tabList_[0] || {}).id || null, tags: sg.tags, reason: sg.reason };
+    const siblings = [
+      ...(qHost.get(host) || []).filter(x => x.row.id !== first.q.row.id).map(x => ({ kind: 'queue', id: x.row.id, title: x.item.title, user: x.item.user, sameUser: (x.item.user || '').toLowerCase() === (it.user || '').toLowerCase() })),
+      ...(byHost.get(host) || []).map(x => ({ ...x, sameUser: (x.user || '').toLowerCase() === (it.user || '').toLowerCase() })),
+    ].slice(0, 12);
+    return { done: false, status, card: { id: first.q.row.id, skipped: first.q.row.status === 'skipped', title: it.title, url: it.url, host, user: it.user, notes: it.notes, folder: it.folder, hasPass: !!it.pass, hasTotp: !!it.totp, bits: it.pass ? first.bits : null, flags: { weak: first.weak, breached: first.breached, reusedWith: first.reusedWith, noPass: first.noPass }, suggestion, siblings } };
+  });
+  api('inbox:decide', (a, id, d = {}) => {
+    const row = db.get('SELECT id, blob FROM inbox WHERE id=?', Number(id)); if (!row) throw new Error('That item is already done');
+    const item = vault.open(row.blob, `inbox/${row.id}`), action = d.action;
+    if (action === 'skip') { db.run("UPDATE inbox SET status='skipped' WHERE id=?", row.id); return inboxStatus(); }
+    if (!['keep', 'archive', 'delete'].includes(action)) throw new Error('Unknown decision');
+    const tabs = tabMap(), tab = tabs.get(Number(d.tabId)) || [...tabs.values()].find(t => t.builtin === 'websites') || [...tabs.values()][0];
+    if (!tab) throw new Error('Choose a type');
+    const t = importTarget(tab), url = d.url ?? item.url, user = d.user ?? item.user, pw = typeof d.password === 'string' && d.password !== '' ? d.password : item.pass;
+    const input = { tabId: tab.id, title: clip(d.title ?? item.title, 200).trim() || siteOf(url) || 'Untitled', notes: clip(d.notes ?? item.notes, 100000), favorite: !!d.favorite, tags: [...(Array.isArray(d.tags) ? d.tags : [])], fields: {}, secrets: {}, creds: [] };
+    if (item.folder && !input.tags.includes(item.folder)) input.tags.push(item.folder);
+    if (t.url && url) input.fields[t.url.key] = url; else if (url) input.notes = `${input.notes}${input.notes ? '\n' : ''}Address: ${url}`;
+    if (t.user && user) input.fields[t.user.key] = user;
+    if (pw) { if (t.pass) input.secrets[t.pass.key] = pw; else input.creds.push({ label: 'Login', kind: 'password', user, secret: pw }); }
+    else if (user && !t.user) input.notes = `${input.notes}${input.notes ? '\n' : ''}User: ${user}`;
+    if (item.totp && t.totp) { try { input.secrets[t.totp.key] = cleanSecret(t.totp, item.totp); } catch { /* an unreadable seed is dropped */ } }
+    let eid;
+    db.transaction(() => {
+      eid = saveEntry(a, input, { audited: false, inTx: true });
+      if (action === 'archive') setArchived(eid, true); else if (action === 'delete') db.run('UPDATE entries SET deleted=? WHERE id=?', Date.now(), eid);
+      db.run('DELETE FROM inbox WHERE id=?', row.id);
+    });
+    const st = ibStats(); st.done++; st[action === 'keep' ? 'kept' : action === 'archive' ? 'archived' : 'deleted']++; db.kvSet('inboxStats', st);
+    const host = siteOf(url);
+    if (host && action !== 'delete') { const rules = getPref('domainRules', {}) || {}; rules[host] = { tabId: tab.id, tags: input.tags.filter(x => x !== item.folder) }; const keys = Object.keys(rules); if (keys.length > 3000) delete rules[keys[0]]; setPref('domainRules', rules); }
+    audit(a, 'review_' + action, eid); changed({ id: eid });
+    return inboxStatus();
   });
 
   // ---- bulk actions ------------------------------------------------------------------------
@@ -832,11 +966,12 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       db.exec(`ATTACH DATABASE '${tmp.replace(/'/g, "''")}' AS bk`);
       try {
         db.transaction(() => {
-          for (const t of ['tabs', 'entries', 'vault_meta', 'files', 'prefs']) db.exec(`DELETE FROM ${t}`);
+          for (const t of ['tabs', 'entries', 'vault_meta', 'files', 'prefs', 'inbox']) db.exec(`DELETE FROM ${t}`);
           db.exec('INSERT INTO vault_meta SELECT k, v FROM bk.vault_meta');
           db.exec('INSERT INTO tabs SELECT id, sort, blob FROM bk.tabs');
           db.exec('INSERT INTO entries SELECT id, tab_id, parent_id, created, updated, deleted, blob FROM bk.entries');
           if (info.have.has('prefs')) db.exec('INSERT INTO prefs SELECT k, blob FROM bk.prefs');
+          if (info.have.has('inbox')) db.exec('INSERT INTO inbox SELECT id, created, status, blob FROM bk.inbox');
           if (info.have.has('files')) db.exec('INSERT INTO files SELECT id, entry_id, created, size, meta, data FROM bk.files');
           db.exec("DELETE FROM kv WHERE k IN ('seededTabs', 'portFieldMigrated')");
           if (info.have.has('kv')) db.exec("INSERT INTO kv SELECT k, v FROM bk.kv WHERE k IN ('seededTabs', 'portFieldMigrated')");
@@ -852,6 +987,7 @@ function createService({ dataDir, log = () => {}, send = () => {} }) {
       for (const t of db.all('SELECT id, blob FROM tabs')) db.run('UPDATE tabs SET blob=? WHERE id=?', seal(open(t.blob, `tab/${t.id}`), `tab/${t.id}`), t.id);
       for (const e of db.all('SELECT id, blob FROM entries')) db.run('UPDATE entries SET blob=? WHERE id=?', seal(open(e.blob, `entry/${e.id}`), `entry/${e.id}`), e.id);
       for (const p of db.all('SELECT k, blob FROM prefs')) db.run('UPDATE prefs SET blob=? WHERE k=?', seal(open(p.blob, `pref/${p.k}`), `pref/${p.k}`), p.k);
+      for (const q of db.all('SELECT id, blob FROM inbox')) db.run('UPDATE inbox SET blob=? WHERE id=?', seal(open(q.blob, `inbox/${q.id}`), `inbox/${q.id}`), q.id);
       for (const f of db.all('SELECT id, meta, data FROM files')) db.run('UPDATE files SET meta=?, data=? WHERE id=?', seal(open(f.meta, `filemeta/${f.id}`), `filemeta/${f.id}`), seal(open(f.data, `file/${f.id}`), `file/${f.id}`), f.id);
     });
     audit(a, 'data_key_rotated', null, opts.mode); changed();

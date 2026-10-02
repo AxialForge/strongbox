@@ -176,3 +176,13 @@ button.ghost:hover { color: var(--accent); transform: none; }
   .eact { margin-left: auto; }
   .tile .value { font-size: 22px; }
 }
+
+/* ---- review queue ---- */
+.rv-progress { display: flex; align-items: center; gap: 12px; margin: -4px 0 14px; } .rv-progress .meter { flex: 1; max-width: 420px; margin: 0; }
+.rv-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.rv-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; min-height: 22px; }
+.rv-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+.rv-actions .grow { flex: 1; } .rv-actions a { display: contents; }
+.rv-sib { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); } .rv-sib:last-of-type { border-bottom: 0; }
+.rvbanner { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 12px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 14px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 14%, var(--panel)), var(--panel)); }
+@media (max-width: 860px) { .rv-grid { grid-template-columns: 1fr; } }
